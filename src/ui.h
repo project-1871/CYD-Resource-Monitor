@@ -58,8 +58,11 @@ const Theme themes[] = {
   {"REDROOT",   TFT_BLACK, 0x2000, 0x6000, 0x2000, TFT_WHITE, 0xB5B5, 0xF800,
    0xF800, TFT_WHITE, 0xB5B5, 0xFB00, 0xA000, TFT_WHITE,
    TFT_WHITE, 0xFB00, 0xF800, false, 0x4000, redrootStrip, true, true},
+  {"MONOROOT",  TFT_BLACK, TFT_BLACK, 0x6B6B, 0x4A4B, TFT_WHITE, 0xB5B5, TFT_WHITE,
+   TFT_WHITE, TFT_WHITE, 0xB5B5, TFT_WHITE, 0xB5B5, TFT_WHITE,
+   0xB5B5, TFT_WHITE, TFT_WHITE, false, 0x4A4B, monoStrip, true, true},
 };
-#define N_THEMES 7
+#define N_THEMES 8
 int themeIdx = 0;
 #define th (themes[themeIdx])
 

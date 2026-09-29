@@ -2,7 +2,7 @@
 
 **English** · [ภาษาไทย](README.th.md)
 
-> **This is a fork of [moomdate/CYD-Resource-Monitor](https://github.com/moomdate/CYD-Resource-Monitor).** It adds a **Linux agent**, a **quick-launch button page** (tap the CYD to open apps on your PC), and **three extra themes** including the CRT-scanline `REDROOT`. Everything from the original still works on Windows and macOS. See [What this fork adds](#what-this-fork-adds).
+> **This is a fork of [moomdate/CYD-Resource-Monitor](https://github.com/moomdate/CYD-Resource-Monitor).** It adds a **Linux agent**, a **quick-launch button page** (tap the CYD to open apps on your PC), and **four extra themes** including the CRT-scanline `REDROOT` and `MONOROOT`. Everything from the original still works on Windows and macOS. See [What this fork adds](#what-this-fork-adds).
 
 A PC/Mac hardware monitor on a **$6 ESP32 board with a 2.8" touch screen** (CYD "Cheap Yellow Display" family). One USB cable carries both power and data — no WiFi setup, no extra wiring, no drivers to install.
 
@@ -21,7 +21,7 @@ A PC/Mac hardware monitor on a **$6 ESP32 board with a 2.8" touch screen** (CYD 
 ## Features
 
 - **Dashboard** — CPU / GPU / RAM / TEMP / DISK / NET tiles with donut gauges, area-filled sparklines, and a layout that auto-adjusts to however many tiles you enable (1–6)
-- **7 themes**, switchable on-device: `CYBER` (neon on black), `SYNTHWAVE` (purple/pink/orange), `MATRIX` (all green), `LIGHT`, plus this fork's `MONO`, `JAPGLITCH` and `REDROOT`
+- **8 themes**, switchable on-device: `CYBER` (neon on black), `SYNTHWAVE` (purple/pink/orange), `MATRIX` (all green), `LIGHT`, plus this fork's `MONO`, `JAPGLITCH`, `REDROOT` and `MONOROOT`
 - **Quick-launch page** — swipe left for six buttons that open apps, sites or folders on your PC (fork addition)
 - **Animated RGB bar** under the header, motherboard-style — and yes, you can turn it off in Settings
 - Tiles pulse a **red warning border** past 85% load
@@ -80,6 +80,7 @@ Pick them on the device: **gear → THEME arrows → SAVE**.
 | `MONO` | pure black and white, grey gauge tracks |
 | `JAPGLITCH` | dark purple with pink/cyan/orange accents and random row-tearing glitch bursts |
 | `REDROOT` | retro hacker terminal: red and white on black, **CRT scanlines** with a rolling bright band, and red/white glitch tears |
+| `MONOROOT` | `REDROOT` in black and white: same scanlines, roll band and glitch tears, greyscale palette |
 
 Themes are one line each in `src/ui.h`. Besides the base colors, a theme can set three optional extras: a gauge `track` color, its own 6-color `strip` for the animated bar, and the `glitch` and `scan` effect flags. Colors are RGB565, but the frame buffer is 8-bit (`RRRGGGBB`), so stick to values that survive that; near-greys in particular drift toward blue or green.
 
@@ -230,4 +231,4 @@ src/
 
 [MIT](LICENSE) — do whatever you like; a link back is appreciated.
 
-Original project by [moomdate](https://github.com/moomdate/CYD-Resource-Monitor). Linux support, quick-launch page and the `MONO` / `JAPGLITCH` / `REDROOT` themes by [project-1871](https://github.com/project-1871). Button icons are rendered from [Nerd Fonts](https://www.nerdfonts.com/) glyphs (MIT / OFL).
+Original project by [moomdate](https://github.com/moomdate/CYD-Resource-Monitor). Linux support, quick-launch page and the `MONO` / `JAPGLITCH` / `REDROOT` / `MONOROOT` themes by [project-1871](https://github.com/project-1871). Button icons are rendered from [Nerd Fonts](https://www.nerdfonts.com/) glyphs (MIT / OFL).
