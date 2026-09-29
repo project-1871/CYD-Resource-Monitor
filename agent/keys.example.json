@@ -1,0 +1,8 @@
+[
+  { "label": "STEAM",   "icon": "steam",   "url": "steam://open/main" },
+  { "label": "BROWSER", "icon": "firefox", "cmd": ["firefox"] },
+  { "label": "EMAIL",   "icon": "email",   "url": "https://mail.google.com" },
+  { "label": "TERMINAL","icon": "terminal","cmd": "alacritty" },
+  { "label": "YOUTUBE", "icon": "youtube", "cmd": ["firefox", "--new-tab", "https://www.youtube.com"] },
+  { "label": "FILES",   "icon": "folder",  "url": "~" }
+]

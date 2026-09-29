@@ -2,7 +2,7 @@
 """CYD Resource Monitor agent.
 
 Reads system stats and streams them as JSON lines over USB serial
-to the ESP32 display. Works on Windows and macOS.
+to the ESP32 display. Works on Windows, macOS and Linux.
 
   python monitor_agent.py               # auto-detect port, 2 Hz
   python monitor_agent.py --list        # list serial ports
@@ -14,10 +14,12 @@ Optional richer data:
   - Windows temps/AMD/Intel: run LibreHardwareMonitor with
     Options > Remote Web Server enabled (default http://localhost:8085)
   - macOS CPU temp:          install `smctemp` (brew install smctemp)
+  - Linux: CPU temp (k10temp/coretemp) and AMD GPUs (amdgpu sysfs) work out of the box
 """
 
 import argparse
 import json
+import os
 import platform
 import re
 import shutil
@@ -32,6 +34,7 @@ import psutil
 
 IS_WIN = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
+IS_LINUX = platform.system() == "Linux"
 
 # ── NVIDIA via pynvml (optional) ───────────────────────────────
 try:
@@ -134,6 +137,83 @@ def lhm_extract(flat):
     return out
 
 
+# ── Linux helpers ──────────────────────────────────────────────
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def linux_amd_cards():
+    """amdgpu cards as (sysfs device dir, marketing name); boot VGA / most VRAM first."""
+    import glob
+    import os
+    cards = []
+    for dev in sorted(glob.glob("/sys/class/drm/card[0-9]*/device")):
+        if _read(dev + "/gpu_busy_percent") is None or dev in [c[0] for c in cards]:
+            continue
+        slot = os.path.basename(os.path.realpath(dev))
+        name = "AMD GPU"
+        try:
+            r = subprocess.run(["lspci", "-vmm", "-s", slot], capture_output=True, text=True, timeout=2)
+            f = dict(l.split(":\t", 1) for l in r.stdout.splitlines() if ":\t" in l)
+            name = f.get("SDevice") or re.sub(r".*\[(.+)\]", r"\1", f.get("Device", name))
+        except Exception:
+            pass
+        vram = int(_read(dev + "/mem_info_vram_total") or 0)
+        cards.append((dev, name, vram))
+    cards.sort(key=lambda c: (_read(c[0] + "/boot_vga") != "1", -c[2]))
+    return [(dev, name, vram > 1 << 30) for dev, name, vram in cards]
+
+
+def linux_gpus(cards):
+    import glob
+    gpus = []
+    for dev, name, discrete in cards:
+        g = {"name": name[:24], "discrete": discrete}
+        busy = _read(dev + "/gpu_busy_percent")
+        if busy is not None:
+            g["load"] = float(busy)
+        for h in glob.glob(dev + "/hwmon/hwmon*/temp1_input"):  # temp1 = edge
+            g["temp"] = int(_read(h)) / 1000
+            break
+        used, total = _read(dev + "/mem_info_vram_used"), _read(dev + "/mem_info_vram_total")
+        if used and total:
+            g["vram_used"] = round(int(used) / 2**30, 1)
+            g["vram_total"] = round(int(total) / 2**30, 1)
+        gpus.append(g)
+    return gpus
+
+
+def linux_cpu_temp():
+    try:
+        temps = psutil.sensors_temperatures()
+    except Exception:
+        return None
+    for chip, pref in (("k10temp", ("Tctl", "Tdie")), ("coretemp", ("Package id 0",)), ("zenpower", ("Tdie", "Tctl"))):
+        for s in temps.get(chip, []):
+            if s.label in pref:
+                return s.current
+        if temps.get(chip):
+            return temps[chip][0].current
+    return None
+
+
+NET_SKIP = ("lo", "docker", "veth", "br-", "virbr", "waydroid", "tun", "tailscale")
+
+
+def net_counters():
+    """Bytes (recv, sent) over physical NICs; on Linux skip loopback/container/VPN interfaces."""
+    if not IS_LINUX:
+        n = psutil.net_io_counters()
+        return n.bytes_recv, n.bytes_sent
+    per = psutil.net_io_counters(pernic=True)
+    nics = [v for k, v in per.items() if not k.startswith(NET_SKIP)]
+    return sum(v.bytes_recv for v in nics), sum(v.bytes_sent for v in nics)
+
+
 # ── macOS helpers ──────────────────────────────────────────────
 def mac_gpus():
     gpus = []
@@ -184,9 +264,10 @@ class Sampler:
     def __init__(self, lhm_url):
         self.lhm_url = lhm_url
         self.prev_disk = psutil.disk_io_counters()
-        self.prev_net = psutil.net_io_counters()
+        self.prev_net = net_counters()
         self.prev_t = time.time()
         self.static_mac_gpus = mac_gpus() if IS_MAC else []
+        self.linux_cards = linux_amd_cards() if IS_LINUX else []
         psutil.cpu_percent()  # prime
 
     def sample(self):
@@ -199,11 +280,11 @@ class Sampler:
         du = psutil.disk_usage("C:\\" if IS_WIN else "/")
 
         dio = psutil.disk_io_counters()
-        nio = psutil.net_io_counters()
+        nio = net_counters()
         disk_r = (dio.read_bytes - self.prev_disk.read_bytes) / dt / 2**20
         disk_w = (dio.write_bytes - self.prev_disk.write_bytes) / dt / 2**20
-        net_dl = (nio.bytes_recv - self.prev_net.bytes_recv) / dt / 2**20
-        net_ul = (nio.bytes_sent - self.prev_net.bytes_sent) / dt / 2**20
+        net_dl = (nio[0] - self.prev_net[0]) / dt / 2**20
+        net_ul = (nio[1] - self.prev_net[1]) / dt / 2**20
         self.prev_disk, self.prev_net = dio, nio
 
         cpu_temp = None
@@ -217,6 +298,9 @@ class Sampler:
             cpu_temp = mac_cpu_temp()
             if not gpus:
                 gpus = list(self.static_mac_gpus)
+        if IS_LINUX:
+            cpu_temp = linux_cpu_temp()
+            gpus += linux_gpus(self.linux_cards)
 
         gpus.sort(key=lambda g: not g.get("discrete", False))  # discrete first
 
@@ -240,6 +324,89 @@ class Sampler:
         if cpu_temp is not None:
             payload["cpu"]["temp"] = round(cpu_temp, 1)
         return payload
+
+
+# ── quick-launch keys ─────────────────────────────────────────
+# The CYD's second page (swipe left) has six buttons; a tap sends "L <n>".
+# Labels + commands live in keys.json so they can change without a reflash.
+KEYS_FILE = os.path.join(os.path.expanduser("~/.config/cyd-monitor"), "keys.json")
+DEFAULT_KEYS = [
+    {"label": "STEAM",   "icon": "steam",   "url": "steam://open/main"},
+    {"label": "BROWSER", "icon": "web",     "url": "https://duckduckgo.com"},
+    {"label": "EMAIL",   "icon": "email",   "url": "https://mail.google.com"},
+    {"label": "DISCORD", "icon": "discord", "url": "https://discord.com/app"},
+    {"label": "YOUTUBE", "icon": "youtube", "url": "https://www.youtube.com"},
+    {"label": "FILES",   "icon": "folder",  "url": "~"},
+]
+# icons built into the firmware (tools/make_icons.py); unknown names show the label's first letter
+ICON_NAMES = ("steam web firefox chrome email discord youtube folder terminal music "
+              "gamepad spotify settings chat camera power star twitch whatsapp robot")
+
+
+def load_keys():
+    """Read keys.json (created with defaults on first run); re-read on every
+    press so edits apply without restarting the agent."""
+    if not os.path.exists(KEYS_FILE):
+        os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
+        with open(KEYS_FILE, "w") as f:
+            json.dump(DEFAULT_KEYS, f, indent=2)
+    try:
+        with open(KEYS_FILE) as f:
+            keys = json.load(f)
+        return keys[:6] if isinstance(keys, list) else DEFAULT_KEYS
+    except (OSError, ValueError) as e:
+        print(f"bad {KEYS_FILE} ({e}), using defaults")
+        return DEFAULT_KEYS
+
+
+def launch_key(n):
+    keys = load_keys()
+    if not 0 <= n < len(keys):
+        return
+    key = keys[n]
+    cmd = key.get("cmd")
+    if cmd is None and key.get("url"):
+        # "url": open a link / folder with the system's default handler
+        url = os.path.expanduser(key["url"])
+        if IS_WIN:
+            print(f"key {n} ({key.get('label')}): {url}")
+            try:
+                os.startfile(url)
+            except OSError as e:
+                print(f"launch failed: {e}")
+            return
+        cmd = ["open" if IS_MAC else "xdg-open", url]
+    elif isinstance(cmd, str):
+        cmd = ["cmd", "/c", cmd] if IS_WIN else ["sh", "-c", cmd]
+    if not cmd:
+        return
+    # uwsm-app puts the app in its own scope, so it outlives this service
+    if IS_LINUX and shutil.which("uwsm-app"):
+        cmd = ["uwsm-app", "--"] + cmd
+    print(f"key {n} ({key.get('label')}): {' '.join(cmd)}")
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        print(f"launch failed: {e}")
+
+
+def handle_input(ser, buf, last):
+    """Non-blocking read of button presses from the CYD. Returns the new
+    partial-line buffer."""
+    n = ser.in_waiting
+    if not n:
+        return buf
+    buf += ser.read(n)
+    while b"\n" in buf:
+        line, buf = buf.split(b"\n", 1)
+        parts = line.decode(errors="ignore").strip().split()
+        if len(parts) == 2 and parts[0] == "L" and parts[1].isdigit():
+            k = int(parts[1])
+            if time.monotonic() - last.get(k, 0) > 1.0:  # debounce double taps
+                last[k] = time.monotonic()
+                launch_key(k)
+    return buf
 
 
 # ── serial ─────────────────────────────────────────────────────
@@ -287,10 +454,18 @@ def main():
         try:
             with serial.Serial(port, 115200, timeout=1) as ser:
                 print(f"connected to {port}")
+                buf, last, next_send = b"", {}, 0.0
                 while True:
-                    line = json.dumps(sampler.sample(), separators=(",", ":")) + "\n"
-                    ser.write(line.encode())
-                    time.sleep(args.interval)
+                    if time.monotonic() >= next_send:
+                        payload = sampler.sample()
+                        keys = load_keys()
+                        payload["keys"] = [str(k.get("label", ""))[:13] for k in keys]
+                        payload["icons"] = [str(k.get("icon", ""))[:11] for k in keys]
+                        line = json.dumps(payload, separators=(",", ":")) + "\n"
+                        ser.write(line.encode())
+                        next_send = time.monotonic() + args.interval
+                    buf = handle_input(ser, buf, last)
+                    time.sleep(0.03)
         except (serial.SerialException, OSError) as e:
             print(f"serial error ({e}), reconnecting in 3 s...")
             time.sleep(3)

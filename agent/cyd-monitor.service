@@ -1,0 +1,15 @@
+# Linux: run the agent as a systemd user service.
+#   cp agent/cyd-monitor.service ~/.config/systemd/user/
+#   (edit the ExecStart paths to match where you cloned the repo / your venv)
+#   systemctl --user daemon-reload && systemctl --user enable --now cyd-monitor
+[Unit]
+Description=CYD Resource Monitor agent (streams PC stats to the CYD over USB serial)
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/CYD-Resource-Monitor/agent/.venv/bin/python %h/CYD-Resource-Monitor/agent/monitor_agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

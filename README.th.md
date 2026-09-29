@@ -2,6 +2,8 @@
 
 [English](README.md) · **ภาษาไทย**
 
+> **Fork note (English):** this fork adds a Linux agent, a quick-launch button page and extra themes. They are documented in the [English README](README.md#what-this-fork-adds) only.
+
 จอมอนิเตอร์ทรัพยากรเครื่อง PC/Mac บน **บอร์ด ESP32 พร้อมจอทัช 2.8 นิ้ว ราคาหลักร้อย** (ตระกูล CYD "Cheap Yellow Display") — สาย USB เส้นเดียวได้ทั้งไฟและข้อมูล ไม่ต้องตั้งค่า WiFi ไม่ต้องต่อสายเพิ่ม ไม่ต้องลง driver
 
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-ESP32-orange)

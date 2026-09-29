@@ -10,6 +10,7 @@
 #include "dash.h"
 #include "detail.h"
 #include "settings.h"
+#include "keys.h"
 
 void setup() {
   Serial.begin(115200);
@@ -40,6 +41,9 @@ void loop() {
     case SCR_DASH:     dash::update();     break;
     case SCR_DETAIL:   dpage::update();   break;
     case SCR_SETTINGS: settings::update(); break;
+    case SCR_KEYS:     keys::update();     break;
   }
+  if (th.glitch) glitchFx();
+  if (th.scan)   scanFx();
   fb.pushSprite(0, 0);
 }

@@ -64,6 +64,11 @@ float histMax(int m) {
   return mx;
 }
 
+// ── Quick-launch keys (labels come from the agent's keys.json) ──
+#define N_KEYS 6
+char keyLabel[N_KEYS][14] = {"STEAM", "BROWSER", "EMAIL", "DISCORD", "YOUTUBE", "FILES"};
+char keyIcon[N_KEYS][12]  = {"steam", "web", "email", "discord", "youtube", "folder"};
+
 // ── Serial JSON ingest ─────────────────────────────
 void parseLine(char *line) {
   static JsonDocument doc;
@@ -103,6 +108,13 @@ void parseLine(char *line) {
 
   pc.netDl = doc["net"]["dl"] | 0.0f;
   pc.netUl = doc["net"]["ul"] | 0.0f;
+
+  JsonArray keys = doc["keys"];
+  for (int i = 0; i < N_KEYS && i < (int)keys.size(); i++)
+    strlcpy(keyLabel[i], keys[i] | "", sizeof(keyLabel[i]));
+  JsonArray icons = doc["icons"];
+  for (int i = 0; i < N_KEYS && i < (int)icons.size(); i++)
+    strlcpy(keyIcon[i], icons[i] | "", sizeof(keyIcon[i]));
 
   strlcpy(pc.host, doc["host"]["name"] | "PC", sizeof(pc.host));
   strlcpy(pc.os,   doc["host"]["os"]   | "?",  sizeof(pc.os));
