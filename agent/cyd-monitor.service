@@ -2,8 +2,10 @@
 #   cp agent/cyd-monitor.service ~/.config/systemd/user/
 #   (edit the ExecStart paths to match where you cloned the repo / your venv)
 #   systemctl --user daemon-reload && systemctl --user enable --now cyd-monitor
+#   Tied to graphical-session.target so launched apps inherit WAYLAND_DISPLAY/DISPLAY.
 [Unit]
 Description=CYD Resource Monitor agent (streams PC stats to the CYD over USB serial)
+PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
@@ -12,4 +14,4 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
