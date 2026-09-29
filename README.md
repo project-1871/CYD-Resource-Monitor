@@ -2,7 +2,7 @@
 
 **English** · [ภาษาไทย](README.th.md)
 
-> **This is a fork of [moomdate/CYD-Resource-Monitor](https://github.com/moomdate/CYD-Resource-Monitor).** It adds a **Linux agent**, a **quick-launch button page** (tap the CYD to open apps on your PC), and **four extra themes** including the CRT-scanline `REDROOT` and `MONOROOT`. Everything from the original still works on Windows and macOS. See [What this fork adds](#what-this-fork-adds).
+> **This is a fork of [moomdate/CYD-Resource-Monitor](https://github.com/moomdate/CYD-Resource-Monitor).** It adds a **Linux agent**, a **quick-launch button page** (tap the CYD to open apps on your PC), a **hello / goodbye screen** when the PC starts and shuts down, and **four extra themes** including the CRT-scanline `REDROOT` and `MONOROOT`. Everything from the original still works on Windows and macOS. See [What this fork adds](#what-this-fork-adds).
 
 A PC/Mac hardware monitor on a **$6 ESP32 board with a 2.8" touch screen** (CYD "Cheap Yellow Display" family). One USB cable carries both power and data — no WiFi setup, no extra wiring, no drivers to install.
 
@@ -70,6 +70,10 @@ Up to six entries are used. A fuller example is in [`agent/keys.example.json`](a
 **Built-in icons:** `steam` `web` `firefox` `chrome` `email` `discord` `youtube` `folder` `terminal` `music` `gamepad` `spotify` `settings` `chat` `camera` `power` `star` `twitch` `whatsapp` `robot`
 
 To add an icon, add a `(name, codepoint)` pair to `ICONS` in [`tools/make_icons.py`](tools/make_icons.py) (codepoints are from [JetBrainsMono Nerd Font](https://www.nerdfonts.com/cheat-sheet)), run it to regenerate `src/icons.h`, and reflash. The script needs Pillow and the font installed; edit `FONT` at the top if yours lives elsewhere.
+
+### Hello / goodbye screen
+
+When the agent starts (e.g. at login) the CYD types out **HELLO** full-screen in the current theme with "<hostname> is online", then returns to the dashboard. When the agent is stopped (shutdown, logout, `systemctl --user stop`, Ctrl+C) it sends a **GOODBYE** that stays up until data comes back. If your board cuts USB power at shutdown, the goodbye only shows briefly.
 
 ### Extra themes
 
