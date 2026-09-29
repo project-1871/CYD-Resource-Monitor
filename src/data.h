@@ -69,10 +69,22 @@ float histMax(int m) {
 char keyLabel[N_KEYS][14] = {"STEAM", "BROWSER", "EMAIL", "DISCORD", "YOUTUBE", "FILES"};
 char keyIcon[N_KEYS][12]  = {"steam", "web", "email", "discord", "youtube", "folder"};
 
+// ── Hello / goodbye banner (agent sends {"msg":"hello"|"bye"}) ──
+enum { MSG_NONE = 0, MSG_HELLO, MSG_BYE };
+int      msgKind = MSG_NONE;
+uint32_t msgAt   = 0;
+#define HELLO_MS 3500   // goodbye stays up until data comes back
+
 // ── Serial JSON ingest ─────────────────────────────
 void parseLine(char *line) {
   static JsonDocument doc;
   if (deserializeJson(doc, line)) return;
+  if (const char *msg = doc["msg"]) {
+    msgKind = strcmp(msg, "bye") ? MSG_HELLO : MSG_BYE;
+    msgAt   = millis();
+    if (msgKind == MSG_BYE) pc.valid = false;
+    return;
+  }
   if (!doc["cpu"].is<JsonObject>()) return;
 
   pc.cpu     = doc["cpu"]["load"]  | 0.0f;
@@ -119,6 +131,7 @@ void parseLine(char *line) {
   strlcpy(pc.host, doc["host"]["name"] | "PC", sizeof(pc.host));
   strlcpy(pc.os,   doc["host"]["os"]   | "?",  sizeof(pc.os));
 
+  if (msgKind == MSG_BYE) msgKind = MSG_NONE;
   pc.valid  = true;
   pc.lastRx = millis();
   pushHistory();

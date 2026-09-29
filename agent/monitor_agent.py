@@ -23,6 +23,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -445,6 +446,8 @@ def main():
             time.sleep(args.interval)
 
     import serial
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    said_hello = False
     while True:
         port = args.port or find_port()
         if not port:
@@ -455,17 +458,26 @@ def main():
             with serial.Serial(port, 115200, timeout=1) as ser:
                 print(f"connected to {port}")
                 buf, last, next_send = b"", {}, 0.0
-                while True:
-                    if time.monotonic() >= next_send:
-                        payload = sampler.sample()
-                        keys = load_keys()
-                        payload["keys"] = [str(k.get("label", ""))[:13] for k in keys]
-                        payload["icons"] = [str(k.get("icon", ""))[:11] for k in keys]
-                        line = json.dumps(payload, separators=(",", ":")) + "\n"
-                        ser.write(line.encode())
-                        next_send = time.monotonic() + args.interval
-                    buf = handle_input(ser, buf, last)
-                    time.sleep(0.03)
+                try:
+                    while True:
+                        if time.monotonic() >= next_send:
+                            payload = sampler.sample()
+                            keys = load_keys()
+                            payload["keys"] = [str(k.get("label", ""))[:13] for k in keys]
+                            payload["icons"] = [str(k.get("icon", ""))[:11] for k in keys]
+                            line = json.dumps(payload, separators=(",", ":")) + "\n"
+                            ser.write(line.encode())
+                            if not said_hello:  # after the first stats, so the CYD knows the host name
+                                ser.write(b'{"msg":"hello"}\n')
+                                said_hello = True
+                            next_send = time.monotonic() + args.interval
+                        buf = handle_input(ser, buf, last)
+                        time.sleep(0.03)
+                except (SystemExit, KeyboardInterrupt):  # service stop / shutdown
+                    ser.write(b'{"msg":"bye"}\n')
+                    ser.flush()
+                    time.sleep(0.3)
+                    raise
         except (serial.SerialException, OSError) as e:
             print(f"serial error ({e}), reconnecting in 3 s...")
             time.sleep(3)
