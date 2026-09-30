@@ -1,6 +1,7 @@
 #pragma once
 #include <ArduinoJson.h>
 #include "ui.h"
+#include "mouth.h"
 
 // ── Metric ids (also settings-tile order) ──────────
 enum { M_CPU = 0, M_GPU, M_RAM, M_TEMP, M_DISK, M_NET, M_COUNT };
@@ -69,6 +70,91 @@ float histMax(int m) {
 char keyLabel[N_KEYS][14] = {"STEAM", "BROWSER", "EMAIL", "DISCORD", "YOUTUBE", "FILES"};
 char keyIcon[N_KEYS][12]  = {"steam", "web", "email", "discord", "youtube", "folder"};
 
+// ── Boombox: what the PC's media player is doing ──
+// {"np":{ok,t,a,st,pos,len,vol,pl}} once a second; {"tl":{s,c,n,i:[...]}} when
+// the song changes (a window of the playlist starting at index s; c = current).
+#define TL_MAX 8
+struct NowPlaying {
+  bool ok = false;
+  char title[48] = "", artist[40] = "", player[12] = "";
+  int  state = 0;            // 0 stopped, 1 playing, 2 paused
+  float pos = 0, len = 0;
+  int  vol = -1;
+  uint32_t rx = 0;
+  int  tlStart = 0, tlCur = -1, tlTotal = 0, tlN = 0;
+  char tl[TL_MAX][40];
+};
+NowPlaying np;
+
+bool boomMsg(JsonDocument &doc) {
+  if (JsonObject o = doc["np"]) {
+    np.ok = o["ok"] | 0;
+    np.vol = o["vol"] | np.vol;
+    if (np.ok) {
+      strlcpy(np.title,  o["t"]  | "", sizeof(np.title));
+      strlcpy(np.artist, o["a"]  | "", sizeof(np.artist));
+      strlcpy(np.player, o["pl"] | "", sizeof(np.player));
+      np.state = o["st"] | 0;
+      np.pos = o["pos"] | 0.0f;
+      np.len = o["len"] | 0.0f;
+    } else {
+      np.tlN = 0; np.tlCur = -1;
+    }
+    np.rx = millis();
+    return true;
+  }
+  if (JsonObject o = doc["tl"]) {
+    np.tlStart = o["s"] | 0;
+    np.tlCur   = o["c"] | -1;
+    np.tlTotal = o["n"] | 0;
+    JsonArray it = o["i"];
+    np.tlN = min((int)it.size(), TL_MAX);
+    for (int i = 0; i < np.tlN; i++) strlcpy(np.tl[i], it[i] | "", sizeof(np.tl[i]));
+    return true;
+  }
+  return false;
+}
+
+// ── Radio (Radio Atlas plugin, via the agent) ──
+// {"rd":{ok,on,p,st,c,t,v,i,n,b}} every 1.5 s; {"rl":{l,cur,i:[names]}} when the list changes.
+#define RL_MAX 20
+struct RadioNow {
+  bool ok = false, on = false, paused = false;
+  char station[42] = "", country[32] = "", title[62] = "", busy[40] = "";
+  int  vol = 0, pos = -1, count = 0;
+  uint32_t rx = 0;
+  char listLabel[12] = "";
+  int  listCur = -1, listN = 0;
+  char list[RL_MAX][32];
+};
+RadioNow rad;
+
+bool radioMsg(JsonDocument &doc) {
+  if (JsonObject o = doc["rd"]) {
+    rad.ok = o["ok"] | 0;
+    rad.on = o["on"] | 0;
+    rad.paused = o["p"] | 0;
+    strlcpy(rad.station, o["st"] | "", sizeof(rad.station));
+    strlcpy(rad.country, o["c"]  | "", sizeof(rad.country));
+    strlcpy(rad.title,   o["t"]  | "", sizeof(rad.title));
+    strlcpy(rad.busy,    o["b"]  | "", sizeof(rad.busy));
+    rad.vol = o["v"] | 0;
+    rad.pos = o["i"] | -1;
+    rad.count = o["n"] | 0;
+    rad.rx = millis();
+    return true;
+  }
+  if (JsonObject o = doc["rl"]) {
+    strlcpy(rad.listLabel, o["l"] | "", sizeof(rad.listLabel));
+    rad.listCur = o["cur"] | -1;
+    JsonArray it = o["i"];
+    rad.listN = min((int)it.size(), RL_MAX);
+    for (int i = 0; i < rad.listN; i++) strlcpy(rad.list[i], it[i] | "", sizeof(rad.list[i]));
+    return true;
+  }
+  return false;
+}
+
 // ── Hello / goodbye banner (agent sends {"msg":"hello"|"bye"}) ──
 enum { MSG_NONE = 0, MSG_HELLO, MSG_BYE };
 int      msgKind = MSG_NONE;
@@ -79,6 +165,9 @@ uint32_t msgAt   = 0;
 void parseLine(char *line) {
   static JsonDocument doc;
   if (deserializeJson(doc, line)) return;
+  if (mouthMsg(doc)) return;
+  if (boomMsg(doc)) return;
+  if (radioMsg(doc)) return;
   if (const char *msg = doc["msg"]) {
     msgKind = strcmp(msg, "bye") ? MSG_HELLO : MSG_BYE;
     msgAt   = millis();

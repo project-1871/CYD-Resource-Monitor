@@ -18,7 +18,7 @@ void update() {
   fb.drawString("QUICK LAUNCH", 14, 4);
   bool on = pc.valid && (millis() - pc.lastRx < 1200);
   fb.fillCircle(SCR_W - 44, 12, 4, pc.valid ? (on ? C_OK : C_WARN) : C_BAD);
-  pageDots(SCR_W - 76, 12, 1, th.accent, C_MUTED);
+  if (pageButton(1)) g_screen = SCR_BOOM;
   if (rgbOn) rgbStrip(23, 2);
   else       fb.drawFastHLine(0, 24, SCR_W, C_BORDER);
 
@@ -67,7 +67,9 @@ void update() {
     fb.drawString("PC NOT CONNECTED", SCR_W / 2, SCR_H / 2);
   }
 
-  if (swipeDir() > 0 || tapUpIn(SCR_W - 86, 0, 30, 24)) g_screen = SCR_DASH;
+  int sw = swipeDir();
+  if (sw > 0) g_screen = SCR_DASH;
+  else if (sw < 0) g_screen = SCR_BOOM;
 }
 
 } // namespace keys

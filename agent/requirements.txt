@@ -1,4 +1,6 @@
 psutil>=5.9
 pyserial>=3.5
+# boombox page (Linux, MPRIS over D-Bus):
+jeepney>=0.8
 # optional — NVIDIA GPU stats:
 # pynvml>=11.5

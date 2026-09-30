@@ -24,6 +24,7 @@ import platform
 import re
 import shutil
 import signal
+import select
 import socket
 import subprocess
 import sys
@@ -392,7 +393,7 @@ def launch_key(n):
         print(f"launch failed: {e}")
 
 
-def handle_input(ser, buf, last):
+def handle_input(ser, buf, last, media=None, radio=None):
     """Non-blocking read of button presses from the CYD. Returns the new
     partial-line buffer."""
     n = ser.in_waiting
@@ -401,13 +402,349 @@ def handle_input(ser, buf, last):
     buf += ser.read(n)
     while b"\n" in buf:
         line, buf = buf.split(b"\n", 1)
+        if line.startswith(b"mouth "):
+            print(f"cyd: {line.decode(errors='ignore').strip()}", flush=True)
         parts = line.decode(errors="ignore").strip().split()
-        if len(parts) == 2 and parts[0] == "L" and parts[1].isdigit():
+        if media and len(parts) >= 2 and parts[0] == "M":        # boombox buttons
+            arg = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+            print(f"boombox: {' '.join(parts[1:])}")
+            media.command(parts[1], arg)
+            media.next_poll = 0                                   # show the result right away
+        elif radio and len(parts) >= 2 and parts[0] == "R":      # radio page
+            arg = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+            print(f"radio: {' '.join(parts[1:])}")
+            radio.command(parts[1], arg)
+            radio.next_poll = 0
+        elif len(parts) == 2 and parts[0] == "L" and parts[1].isdigit():
             k = int(parts[1])
             if time.monotonic() - last.get(k, 0) > 1.0:  # debounce double taps
                 last[k] = time.monotonic()
                 launch_key(k)
     return buf
+
+
+# ── boombox (Linux: MPRIS media players over D-Bus) ─────────────
+# The CYD's third page (swipe left twice) is a boombox. Once a second the
+# agent sends {"np": ...} with what the busiest media player is doing and,
+# when the song changes, {"tl": ...} with a window of its playlist (players
+# with the MPRIS TrackList interface, e.g. VLC). The CYD sends back
+# "M play|next|prev|volup|voldn" or "M goto <n>".
+# Needs `pip install jeepney`; without it the page just says nothing's playing.
+MUSIC_PLAYLIST = os.path.expanduser("~/Music/All My Music.m3u")
+MPRIS = "/org/mpris/MediaPlayer2"
+try:
+    from jeepney import DBusAddress, MessageType, new_method_call
+    from jeepney.io.blocking import open_dbus_connection
+except ImportError:
+    DBusAddress = None
+
+
+def ascii_text(s, n):
+    """The CYD's fonts are ASCII-only: fold accents (Canción -> Cancion)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", s).strip()[:n]
+
+
+class Media:
+    def __init__(self):
+        self.conn = None
+        self.player = None
+        self.tracks = []          # playlist object paths (for "goto")
+        self.tl_key = None
+        self.tl_sent = 0.0
+
+    def _call(self, dest, path, iface, method, sig=None, body=()):
+        if self.conn is None:
+            self.conn = open_dbus_connection(bus="SESSION")
+        msg = new_method_call(DBusAddress(path, bus_name=dest, interface=iface), method, sig, body)
+        reply = self.conn.send_and_get_reply(msg, timeout=1)
+        if reply.header.message_type == MessageType.error:
+            raise RuntimeError(f"{method}: {reply.body}")
+        return reply.body
+
+    def _get(self, dest, iface, name):
+        return self._call(dest, MPRIS, "org.freedesktop.DBus.Properties", "Get",
+                          "ss", (iface, name))[0][1]
+
+    def _pick_player(self):
+        names = self._call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus", "ListNames")[0]
+        players = [n for n in names if n.startswith("org.mpris.MediaPlayer2.")]
+        if not players:
+            return None
+        status = {}
+        for p in players:
+            try:
+                status[p] = self._get(p, "org.mpris.MediaPlayer2.Player", "PlaybackStatus")
+            except Exception:
+                status[p] = "Stopped"
+        rank = {"Playing": 0, "Paused": 1}
+        # playing beats paused beats stopped; then VLC (it has a playlist); then the last one used
+        return min(players, key=lambda p: (rank.get(status[p], 2), "vlc" not in p, p != self.player))
+
+    @staticmethod
+    def _volume():
+        try:
+            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                                 capture_output=True, text=True, timeout=1).stdout
+            v = round(float(out.split()[1]) * 100)
+            return 0 if "MUTED" in out else v
+        except Exception:
+            return -1
+
+    @staticmethod
+    def _title(meta):
+        t = meta.get("xesam:title", ("s", ""))[1]
+        if not t:                                   # untagged file: use its name
+            from urllib.parse import unquote
+            t = unquote(meta.get("xesam:url", ("s", ""))[1])
+        if "/" in t:                                # VLC titles untagged files by their path
+            t = os.path.splitext(os.path.basename(t))[0]
+        return t
+
+    def sample(self):
+        """(np line, tl line or None) to send to the CYD."""
+        if DBusAddress is None or not IS_LINUX:
+            return {"np": {"ok": 0}}, None
+        try:
+            self.player = p = self._pick_player()
+            if not p:
+                self.tracks, self.tl_key = [], None
+                return {"np": {"ok": 0, "vol": self._volume()}}, None
+            pl = "org.mpris.MediaPlayer2.Player"
+            meta = self._get(p, pl, "Metadata")
+            status = self._get(p, pl, "PlaybackStatus")
+            try:
+                pos = self._get(p, pl, "Position") / 1e6
+            except Exception:
+                pos = 0
+            artist = meta.get("xesam:artist", ("as", []))[1]
+            npd = {"ok": 1, "t": ascii_text(self._title(meta), 46),
+                   "a": ascii_text(", ".join(artist) if isinstance(artist, list) else artist, 38),
+                   "st": {"Playing": 1, "Paused": 2}.get(status, 0),
+                   "pos": round(pos, 1), "len": round(meta.get("mpris:length", ("x", 0))[1] / 1e6),
+                   "vol": self._volume(),
+                   "pl": ascii_text(p.split(".")[3], 10).upper()}
+            return {"np": npd}, self._tracklist(p, meta.get("mpris:trackid", ("o", ""))[1])
+        except Exception as e:
+            print(f"media: {e}")
+            self.conn = None
+            return {"np": {"ok": 0}}, None
+
+    def _tracklist(self, p, current):
+        tli = "org.mpris.MediaPlayer2.TrackList"
+        try:
+            self.tracks = list(self._get(p, tli, "Tracks"))
+        except Exception:
+            self.tracks = []
+            return None
+        cur = self.tracks.index(current) if current in self.tracks else -1
+        key = (p, cur, len(self.tracks))
+        if key == self.tl_key and time.monotonic() - self.tl_sent < 10:
+            return None
+        start = max(0, cur - 1)
+        window = self.tracks[start:start + 8]
+        metas = self._call(p, MPRIS, tli, "GetTracksMetadata", "ao", (window,))[0] if window else []
+        self.tl_key, self.tl_sent = key, time.monotonic()
+        return {"tl": {"s": start, "c": cur, "n": len(self.tracks),
+                       "i": [ascii_text(self._title(m), 38) for m in metas]}}
+
+    def command(self, cmd, arg=None):
+        pl = "org.mpris.MediaPlayer2.Player"
+        try:
+            if cmd in ("volup", "voldn"):
+                subprocess.run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
+                                "5%+" if cmd == "volup" else "5%-"], timeout=2)
+                return
+            p = self.player or self._pick_player()
+            if not p:
+                if cmd == "play" and os.path.exists(MUSIC_PLAYLIST):  # nothing open: start the library
+                    print(f"media: opening {MUSIC_PLAYLIST}")
+                    subprocess.Popen(["vlc", "--random", MUSIC_PLAYLIST], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     start_new_session=True)
+                return
+            if cmd == "goto" and arg is not None and 0 <= arg < len(self.tracks):
+                self._call(p, MPRIS, "org.mpris.MediaPlayer2.TrackList", "GoTo", "o",
+                           (self.tracks[arg],))
+            else:
+                method = {"play": "PlayPause", "next": "Next", "prev": "Previous"}.get(cmd)
+                if method:
+                    self._call(p, MPRIS, pl, method)
+            self.tl_key = None                     # resend the playlist window right away
+        except Exception as e:
+            print(f"media {cmd}: {e}")
+            self.conn = None
+
+
+# ── radio (Linux: the Radio Atlas Omarchy plugin) ──────────────
+# The CYD's fourth page drives Radio Atlas (akshar.radio-atlas) through the
+# plugin's own radio-player / radio-fetch scripts. The agent sends
+# {"rd": ...} (what's on) every 1.5 s and {"rl": ...} (the station list)
+# when it changes; the CYD sends "R toggle|next|prev|random|volup|voldn",
+# "R genre <n>" or "R play <n>".
+RADIO_DIR = os.path.expanduser("~/.config/omarchy/plugins/akshar.radio-atlas")
+RADIO_RUN = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "omarchy-radio-atlas")
+RADIO_GENRES = ["rock", "jazz", "hip hop", "lofi", "news"]   # + RECENT; labels live in the firmware
+RADIO_LIST_MAX = 20
+
+
+class Radio:
+    def __init__(self):
+        self.ok = IS_LINUX and os.path.exists(os.path.join(RADIO_DIR, "radio-player"))
+        self.stations, self.scope, self.label = [], "results", ""
+        self.list_ver = 0          # bumped whenever self.stations changes
+        self.sent_ver = -1
+        self.busy = ""             # "searching..." text while a fetch runs
+        self.next_poll = 0.0
+        self.lock = __import__("threading").Lock()
+
+    def _run(self, script, *args, timeout=20):
+        return subprocess.run([os.path.join(RADIO_DIR, script), *args], capture_output=True,
+                              text=True, timeout=timeout, stdin=subprocess.DEVNULL).stdout
+
+    def _set_list(self, stations, scope, label):
+        with self.lock:
+            self.stations, self.scope, self.label = stations[:RADIO_LIST_MAX], scope, label
+            self.list_ver += 1
+
+    def _load(self, path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def status(self):
+        try:
+            return json.loads(self._run("radio-player", "status", timeout=5) or "{}")
+        except Exception:
+            return {}
+
+    def sample(self):
+        """(rd line, rl line or None)."""
+        if not self.ok:
+            return {"rd": {"ok": 0}}, None
+        s = self.status()
+        st = s.get("station") or {}
+        if s.get("running") and not self.stations:   # started from the globe: show its queue
+            q = self._load(os.path.join(RADIO_RUN, "playlist.json"))
+            if q:
+                self._set_list(q, "queue", "PLAYING")
+        rd = {"ok": 1, "on": int(bool(s.get("running"))), "p": int(bool(s.get("paused"))),
+              "st": ascii_text(st.get("name", ""), 40), "c": ascii_text(st.get("country", ""), 30),
+              "t": ascii_text(s.get("title", ""), 60), "v": round(float(s.get("volume") or 0)),
+              "i": s.get("playlistPosition", -1), "n": s.get("playlistCount", 0),
+              "b": self.busy}
+        rl = None
+        with self.lock:
+            if self.sent_ver != self.list_ver:
+                cur = next((i for i, x in enumerate(self.stations)
+                            if x.get("uuid") and x.get("uuid") == st.get("uuid")), -1)
+                rl = {"rl": {"l": self.label, "cur": cur,
+                             "i": [ascii_text(x.get("name", "?"), 30) for x in self.stations]}}
+                self.sent_ver = self.list_ver
+        return {"rd": rd}, rl
+
+    def command(self, cmd, arg=None):
+        if not self.ok:
+            return
+        import threading
+        simple = {"toggle": "toggle", "next": "next", "prev": "previous",
+                  "volup": "volume-up", "voldn": "volume-down"}
+        if cmd in simple:
+            self._run("radio-player", simple[cmd], timeout=8)
+            if cmd in ("next", "prev"):
+                self.sent_ver = -1                      # re-highlight the playing station
+        elif cmd == "genre" and arg is not None:
+            threading.Thread(target=self._genre, args=(arg,), daemon=True).start()
+        elif cmd == "random":
+            threading.Thread(target=self._random, daemon=True).start()
+        elif cmd == "play" and arg is not None:
+            threading.Thread(target=self._play, args=(arg,), daemon=True).start()
+
+    def _genre(self, n):
+        if n < len(RADIO_GENRES):
+            q = RADIO_GENRES[n]
+            self.busy = f"finding {q} stations..."
+            try:
+                self._run("radio-fetch", "search", q, timeout=30)
+                self._set_list(self._load(os.path.join(RADIO_RUN, "results.json")), "results", q.upper())
+            finally:
+                self.busy = ""
+        else:                                            # RECENT
+            recent = json.loads(self._run("radio-state", "get") or "{}").get("recent", [])
+            self._set_list(recent, "recent", "RECENT")
+
+    def _random(self):
+        self.busy = "tuning a random station..."
+        try:
+            self._run("radio-fetch", "random", timeout=30)
+            res = self._load(os.path.join(RADIO_RUN, "results.json"))
+            self._set_list(res, "results", "RANDOM")
+            if res:
+                self._run("radio-player", "play", res[0]["uuid"], "results", timeout=30)
+                self.sent_ver = -1
+        finally:
+            self.busy = ""
+
+    def _play(self, n):
+        with self.lock:
+            if not 0 <= n < len(self.stations):
+                return
+            station, scope, stations = self.stations[n], self.scope, list(self.stations)
+        if scope == "queue":                             # the globe's queue: hand it over as a selection
+            with open(os.path.join(RADIO_RUN, "play-selection.json"), "w") as f:
+                json.dump(stations, f)
+            scope = "selection"
+        self.busy = f"tuning {ascii_text(station.get('name', ''), 24)}..."
+        try:
+            self._run("radio-player", "play", station["uuid"], scope, timeout=30)
+            self.sent_ver = -1
+        finally:
+            self.busy = ""
+
+
+# ── talking mouth ──────────────────────────────────────────────
+# Alice's TTS (kokoro_synth.py) sends mouth-openness frames and word timings
+# as JSON datagrams while she speaks; they go to the CYD as-is.
+MOUTH_PORT = 47811
+
+
+def mouth_socket():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("127.0.0.1", MOUTH_PORT))
+    except OSError as e:
+        print(f"mouth relay disabled ({e})")
+        return None
+    s.setblocking(False)
+    return s
+
+
+def relay_mouth(sock, ser, wait=0.03):
+    """Wait up to `wait` s for datagrams and forward each one as a line."""
+    if sock is None:
+        time.sleep(wait)
+        return
+    if not select.select([sock], [], [], wait)[0]:
+        return
+    while True:
+        try:
+            data = sock.recv(512)
+        except BlockingIOError:
+            return
+        if data and b"\n" not in data:
+            ser.write(data + b"\n")
+            relay_mouth.n += 1
+            if data == b'{"talk":0}':
+                print(f"mouth: relayed {relay_mouth.n} messages", flush=True)
+                relay_mouth.n = 0
+
+
+relay_mouth.n = 0
 
 
 # ── serial ─────────────────────────────────────────────────────
@@ -447,6 +784,10 @@ def main():
 
     import serial
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    mouth = mouth_socket()
+    media = Media()
+    media.next_poll = 0.0
+    radio = Radio()
     said_hello = False
     while True:
         port = args.port or find_port()
@@ -471,8 +812,18 @@ def main():
                                 ser.write(b'{"msg":"hello"}\n')
                                 said_hello = True
                             next_send = time.monotonic() + args.interval
-                        buf = handle_input(ser, buf, last)
-                        time.sleep(0.03)
+                        if time.monotonic() >= media.next_poll:
+                            for msg in media.sample():
+                                if msg:
+                                    ser.write(json.dumps(msg, separators=(",", ":")).encode() + b"\n")
+                            media.next_poll = time.monotonic() + 1.0
+                        if time.monotonic() >= radio.next_poll:
+                            for msg in radio.sample():
+                                if msg:
+                                    ser.write(json.dumps(msg, separators=(",", ":")).encode() + b"\n")
+                            radio.next_poll = time.monotonic() + 1.5
+                        buf = handle_input(ser, buf, last, media, radio)
+                        relay_mouth(mouth, ser)
                 except (SystemExit, KeyboardInterrupt):  # service stop / shutdown
                     ser.write(b'{"msg":"bye"}\n')
                     ser.flush()

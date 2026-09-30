@@ -11,6 +11,8 @@
 #include "detail.h"
 #include "settings.h"
 #include "keys.h"
+#include "boom.h"
+#include "radio.h"
 
 // Full-screen HELLO / GOODBYE, typed out letter by letter in the theme accent
 void drawMsg() {
@@ -41,8 +43,8 @@ void drawMsg() {
 }
 
 void setup() {
+  Serial.setRxBufferSize(4096);   // must come before begin() or it's ignored
   Serial.begin(115200);
-  Serial.setRxBufferSize(2048);
 
   tft.init();
   tft.setRotation(1);
@@ -58,6 +60,7 @@ void setup() {
   }
 
   loadSettings();
+  faceReady();                     // set up the talking face
 }
 
 void loop() {
@@ -65,14 +68,17 @@ void loop() {
   serialPoll();
 
   fb.fillSprite(C_BG);
-  switch (g_screen) {
+  if (mouthActive()) drawMouth();   // Alice is speaking: takes the whole screen
+  else switch (g_screen) {
     case SCR_DASH:     dash::update();     break;
     case SCR_DETAIL:   dpage::update();   break;
     case SCR_SETTINGS: settings::update(); break;
     case SCR_KEYS:     keys::update();     break;
+    case SCR_BOOM:     boom::update();     break;
+    case SCR_RADIO:    radio::update();    break;
   }
   if (msgKind == MSG_HELLO && millis() - msgAt > HELLO_MS) msgKind = MSG_NONE;
-  if (msgKind != MSG_NONE) drawMsg();
+  if (msgKind != MSG_NONE && talkState == TALK_OFF) drawMsg();
   if (th.glitch) glitchFx();
   if (th.scan)   scanFx();
   fb.pushSprite(0, 0);

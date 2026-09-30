@@ -11,7 +11,7 @@ TFT_Touch   touch(TOUCH_DCS, TOUCH_DCLK, TOUCH_DIN, TOUCH_DOUT);
 Preferences prefs;
 
 // ── Screens ────────────────────────────────────────
-enum { SCR_DASH = 0, SCR_DETAIL, SCR_SETTINGS, SCR_KEYS };
+enum { SCR_DASH = 0, SCR_DETAIL, SCR_SETTINGS, SCR_KEYS, SCR_BOOM, SCR_RADIO };
 int g_screen = SCR_DASH;
 
 // ── Themes (colors chosen to survive 8-bit RRRGGGBB) ─
@@ -117,12 +117,26 @@ bool tapUpIn(int x, int y, int w, int h) {
          in.sx >= x && in.sx < x + w && in.sy >= y && in.sy < y + h;
 }
 
-// page dots in the header: which of the two swipe pages is showing
+// page dots (inside the page button): which page is showing
 void pageDots(int x, int y, int page, uint16_t on, uint16_t off) {
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 4; i++) {             // dashboard, quick launch, boombox, radio
     if (i == page) fb.fillCircle(x + i * 10, y, 3, on);
     else           fb.drawCircle(x + i * 10, y, 3, off);
   }
+}
+
+// One big "next page" button in every page header: dashboard -> quick launch
+// -> boombox -> radio -> dashboard. The dots inside show which page this is.
+bool pageButton(int page) {
+  const int x = SCR_W - 124, y = 1, w = 74, h = 22;
+  bool hot = in.down && in.sx >= x - 6 && in.sx < x + w + 6 && in.sy < 27;
+  fb.fillRoundRect(x, y, w, h, 7, hot ? th.accent : C_CARD);
+  fb.drawRoundRect(x, y, w, h, 7, th.accent);
+  pageDots(x + 12, y + h / 2, page, hot ? C_BG : th.accent, hot ? C_BG : C_MUTED);
+  int cx = x + w - 16;
+  fb.fillTriangle(cx - 3, y + 5, cx - 3, y + h - 5, cx + 6, y + h / 2, hot ? C_BG : th.accent);
+  return in.justUp && abs(in.x - in.sx) < 25 && abs(in.y - in.sy) < 25 &&
+         in.sx >= x - 6 && in.sx < x + w + 6 && in.sy < 27;
 }
 
 bool tapIn(int x, int y, int w, int h) {

@@ -46,7 +46,7 @@ Your user needs permission to open the serial port. On most distros that means b
 
 ### Quick-launch page
 
-Swipe **left** on the dashboard (or tap the page dots in the header) to get a 3×2 grid of buttons. Tapping one sends `L <n>` back over the same USB cable, and the agent launches whatever you configured. Swipe right to go back.
+Swipe **left** on the dashboard (or tap the page button in the header) to get a 3×2 grid of buttons. Tapping one sends `L <n>` back over the same USB cable, and the agent launches whatever you configured. Swipe right to go back.
 
 The buttons live in `~/.config/cyd-monitor/keys.json` on the PC (`%USERPROFILE%\.config\cyd-monitor\keys.json` on Windows). The agent creates it with defaults on first run and **re-reads it on every press**, so edits apply instantly: no reflash, no agent restart.
 
@@ -74,6 +74,22 @@ To add an icon, add a `(name, codepoint)` pair to `ICONS` in [`tools/make_icons.
 ### Hello / goodbye screen
 
 When the agent starts (e.g. at login) the CYD types out **HELLO** full-screen in the current theme with "<hostname> is online", then returns to the dashboard. When the agent is stopped (shutdown, logout, `systemctl --user stop`, Ctrl+C) it sends a **GOODBYE** that stays up until data comes back. If your board cuts USB power at shutdown, the goodbye only shows briefly.
+
+### Page button
+
+Every page has one big **next page** button in its header (the dots inside show where you are). Each tap moves on: **dashboard → quick launch → boombox → radio → dashboard**. Swiping left/right still works too.
+
+### Boombox page (Linux)
+
+A boombox for whatever is playing on the PC: two speakers that pump while music plays, an LCD with title, artist, equalizer and progress, big **VOL− ⏮ ⏯ ⏭ VOL+** buttons, and the player's track list underneath (tap a song to jump to it). The agent reads any [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) player over D-Bus (it prefers the one that's playing, then VLC), so it needs `pip install jeepney`. Volume buttons change the system volume (`wpctl`). The track list needs a player with the MPRIS TrackList interface, such as VLC (enable **Tools → Preferences → Interface → Main interfaces → D-Bus**, or `dbus=1` in `vlcrc`). If nothing is playing, ⏯ opens `~/Music/All My Music.m3u` in VLC on shuffle.
+
+### Radio page (Linux + Omarchy)
+
+Drives the [Radio Atlas](https://github.com/AksharP5/omarchy-radio-atlas) Omarchy plugin: a tuner dial whose needle tracks your place in the station list, the station and song on air, **⏮ ⏯ ⏭**, a die for a random station, radio volume, genre buttons (**ROCK JAZZ HIPHOP LOFI NEWS RECENT**) that load 20 stations each, and a station list you swipe up/down and tap to play. The agent calls the plugin's own `radio-player` / `radio-fetch` scripts; the page shows "Radio Atlas not found" without it.
+
+### Talking face (optional)
+
+If something sends JSON datagrams to UDP `127.0.0.1:47811` (`{"talk":1}`, `{"m":0.0-1.0}` mouth openness, `{"w":"word"}` captions, `{"talk":0}`), the agent relays them and the CYD shows a full-screen talking face lip-synced to it, with the words captioned underneath. The author feeds it from a local text-to-speech voice. The face art isn't included: put a black-and-white line drawing at `tools/art/catgirl.png` and run `tools/make_catgirl.py` (edit the mouth/eye coordinates at the top for your drawing). Without it the mouth animates on a blank page. `tools/face_preview.cpp` renders frames on a PC.
 
 ### Extra themes
 
@@ -218,7 +234,9 @@ agent/
 ├── keys.example.json  # sample quick-launch buttons
 └── cyd-monitor.service # Linux systemd user unit
 tools/
-└── make_icons.py      # renders Nerd Font glyphs into src/icons.h
+├── make_icons.py      # renders Nerd Font glyphs into src/icons.h
+├── make_catgirl.py    # bakes your line drawing into src/catgirl_art.h (not in the repo)
+└── face_preview.cpp   # renders talking-face frames on a PC
 src/
 ├── config.h           # pins
 ├── ui.h               # sprite renderer, themes, touch, widgets
@@ -227,6 +245,11 @@ src/
 ├── detail.h           # per-metric graph page
 ├── settings.h         # theme / RGB / tile picker
 ├── keys.h             # quick-launch page
+├── boom.h             # boombox page (MPRIS media player)
+├── radio.h            # radio page (Radio Atlas)
+├── mouth.h            # talking-face mode: state, captions
+├── face.h             # talking face renderer (cat girl line art + live mouth)
+├── face_popart.h      # older pop-art lips face (not built; kept for reference)
 ├── icons.h            # 48×48 1-bit button icons (generated)
 └── main.cpp           # loop + screen switching
 ```

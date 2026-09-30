@@ -128,7 +128,7 @@ void drawHeader() {
   // link dot
   bool on = pc.valid && (millis() - pc.lastRx < 1200);
   fb.fillCircle(SCR_W - 44, 12, 4, pc.valid ? (on ? C_OK : C_WARN) : C_BAD);
-  pageDots(SCR_W - 76, 12, 0, th.accent, C_MUTED);
+  if (pageButton(0)) g_screen = SCR_KEYS;
   drawGear(SCR_W - 18, 12);
   if (rgbOn) rgbStrip(23, 2);                // animated RGB accent line
   else       fb.drawFastHLine(0, 24, SCR_W, C_BORDER);
@@ -169,7 +169,7 @@ void update() {
   }
 
   if (tapIn(SCR_W - 34, 0, 34, 24)) g_screen = SCR_SETTINGS;
-  if (swipeDir() < 0 || tapUpIn(SCR_W - 86, 0, 30, 24)) g_screen = SCR_KEYS;
+  if (swipeDir() < 0) g_screen = SCR_KEYS;
   if (!pc.valid) drawWaiting();
 }
 

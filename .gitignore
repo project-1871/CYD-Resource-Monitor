@@ -9,3 +9,7 @@ agent/build/
 agent/*.spec
 __pycache__/
 .DS_Store
+
+# talking-face art: someone else's drawing, kept local (see src/face.h)
+tools/art/
+src/catgirl_art.h
