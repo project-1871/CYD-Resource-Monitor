@@ -89,7 +89,15 @@ Drives the [Radio Atlas](https://github.com/AksharP5/omarchy-radio-atlas) Omarch
 
 ### Talking face (optional)
 
-If something sends JSON datagrams to UDP `127.0.0.1:47811` (`{"talk":1}`, `{"m":0.0-1.0}` mouth openness, `{"w":"word"}` captions, `{"mood":"happy"}`, `{"talk":0}`), the agent relays them and the CYD shows a full-screen talking face lip-synced to it, with the words captioned underneath. The author feeds it from a local text-to-speech voice. The face art isn't included: put a black-and-white line drawing at `tools/art/catgirl.png` and run `tools/make_catgirl.py` (edit the mouth/eye coordinates at the top for your drawing). Without it the mouth animates on a blank page. `tools/face_preview.cpp` renders frames on a PC.
+If something sends JSON datagrams to UDP `127.0.0.1:47811` (`{"talk":1}`, `{"m":0.0-1.0}` mouth openness, `{"w":"word"}` captions, `{"mood":"happy"}`, `{"talk":0}`), the agent relays them and the CYD shows a full-screen talking face lip-synced to it, with the words captioned underneath. The author feeds it from a local text-to-speech voice. The face art isn't included, so **bring your own picture**:
+
+```bash
+pip install pillow
+python tools/face_setup.py path/to/your-picture.png
+pio run -t upload
+```
+
+`face_setup.py` opens a page in your browser with your picture and walks you through ten clicks: the top of the head, the chin, the two mouth corners, each eye's centre and outline, and the cheeks. Then it erases the drawn mouth and eyes, bakes everything into `src/face_art.h`, and (if `g++` is installed) shows every mood as the CYD will draw it. The moods' eyes, brows and symbols are placed and sized from your clicks, so they fit any face. Black-and-white line art on a white background, facing forward, looks best (colour pictures become greyscale). Your points are saved in `tools/art/face.json`; run `python tools/face_setup.py` with no picture to adjust them. Without a picture the mouth animates on a blank page.
 
 **Moods:** send `{"mood":X}` as a sentence starts and the face switches expression, with a manga symbol that pops in: `happy` (^^ eyes, sparkles), `angry` (slanted brows, pulsing anger vein), `sad` (worried brows, sweat drop and tear), `surprised` (round eyes, "!!"), `smug` (half-lidded eyes, smirk), `curious` (raised brow, "?") or `neutral`. Each mood resets to neutral at the next `{"talk":1}`.
 
@@ -237,7 +245,8 @@ agent/
 └── cyd-monitor.service # Linux systemd user unit
 tools/
 ├── make_icons.py      # renders Nerd Font glyphs into src/icons.h
-├── make_catgirl.py    # bakes your line drawing into src/catgirl_art.h (not in the repo)
+├── face_setup.py      # pick your face picture's eyes/mouth in a browser, then bake it
+├── make_face.py       # bakes tools/art/face.json + picture into src/face_art.h (not in the repo)
 └── face_preview.cpp   # renders talking-face frames on a PC
 src/
 ├── config.h           # pins

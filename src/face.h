@@ -1,11 +1,11 @@
 #pragma once
 #include <math.h>
 #include <stdint.h>
-// The drawing itself isn't in the repo (it's someone else's art): put a
-// line-art PNG at tools/art/catgirl.png and run tools/make_catgirl.py to bake
-// src/catgirl_art.h. Without it the mouth animates on blank paper.
-#if __has_include("catgirl_art.h")
-#include "catgirl_art.h"
+// The drawing itself isn't in the repo (it's someone else's art): run
+// tools/face_setup.py <your picture> to click its eyes/mouth in a browser and
+// bake src/face_art.h. Without it the mouth animates on blank paper.
+#if __has_include("face_art.h")
+#include "face_art.h"
 #else
 #define CAT_W 0
 #define CAT_H 212
@@ -17,6 +17,7 @@
 #define CAT_EYE0_Y 90.0f
 #define CAT_EYE1_X 200.0f
 #define CAT_EYE1_Y 90.0f
+#define CAT_EYE_R 19.3f
 #define CAT_MOUTH_X 160.0f
 #define CAT_MOUTH_Y 120.0f
 #define CAT_SCALE 0.4f
@@ -31,7 +32,7 @@ static const uint8_t catEyesBlank[1] = {0};
 
 // ── Talking face ────────────────────────────────────
 // An anime cat girl in black-and-white line art (baked from a drawing by
-// tools/make_catgirl.py into catgirl_art.h, see below). The drawn mouth was erased from
+// tools/make_face.py into face_art.h, see below). The drawn mouth was erased from
 // the art; faceDraw paints a live one in its place: a little cat ":3" when
 // closed, opening into a rounded anime mouth with a fang and a tongue. The
 // eyes swap to a shut copy while faceBlink is set. Pink blush and the mouth
@@ -283,29 +284,38 @@ static void glyph(uint8_t *dst, char ch, float cx, float cy, float s, uint8_t fi
   }
 }
 
-// eye centres in screen px (the art's eyes tilt: the right one sits higher)
-static const float eyeX[2] = {CAT_EYE0_X + 2, CAT_EYE1_X + 4};
-static const float eyeY[2] = {CAT_EYE0_Y - 8, CAT_EYE1_Y - 2};
+// Everything is placed from the eyes, so it fits whatever face was baked:
+// FK scales strokes to the eye size (1 = the art this was tuned on), FD is the
+// distance between the eyes and FMX/FMY the point between them.
+static const float eyeX[2] = {CAT_EYE0_X, CAT_EYE1_X};
+static const float eyeY[2] = {CAT_EYE0_Y, CAT_EYE1_Y};
+#define FK  (CAT_EYE_R / 19.3f)
+#define FD  (CAT_EYE1_X - CAT_EYE0_X)
+#define FMX ((CAT_EYE0_X + CAT_EYE1_X) / 2)
+#define FMY ((CAT_EYE0_Y + CAT_EYE1_Y) / 2)
+// a spot around the head, in eye-distances from the middle of the eyes
+static inline float spotX(float u) { return fclamp(FMX + u * FD, 16, FACE_W - 16); }
+static inline float spotY(float v) { return fclamp(FMY + v * FD, 18, FACE_H - 18); }
 
 static void drawMoodEyes(uint8_t *dst) {
   for (int i = 0; i < 2; i++) {
     float cx = eyeX[i], cy = eyeY[i], side = i ? 1 : -1;   // side: outer direction
     switch (faceMood) {
       case MOOD_HAPPY:            // ^ ^
-        curve(dst, cx - 13, cy + 5, cx, cy - 13, cx + 13, cy + 5, 3.5f);
+        curve(dst, cx - 13 * FK, cy + 5 * FK, cx, cy - 13 * FK, cx + 13 * FK, cy + 5 * FK, 3.5f * FK);
         break;
       case MOOD_SURPRISED:        // wide round eyes, tiny pupils
-        ring(dst, cx, cy, 12, 2.5f);
-        disc(dst, cx, cy + 1, 4.5f, faceInk[3]);
-        disc(dst, cx - 1.5f, cy - 1, 1.3f, 0xFF);
+        ring(dst, cx, cy, 12 * FK, 2.5f * FK);
+        disc(dst, cx, cy + FK, 4.5f * FK, faceInk[3]);
+        disc(dst, cx - 1.5f * FK, cy - FK, 1.3f * FK, 0xFF);
         break;
       case MOOD_SMUG: {           // half-lidded, iris peeking under a flat lid
-        for (int y = (int)cy; y <= (int)(cy + 9); y++)
-          for (int x = (int)(cx - 9); x <= (int)(cx + 9); x++)
-            if (hypotf(x + 0.5f - (cx + side * 2), y + 0.5f - cy) <= 8.5f) paintPx(dst, x, y, faceInk[3]);
-        disc(dst, cx + side * 2 - 3, cy + 3, 1.6f, 0xFF);
-        stroke(dst, cx - 14, cy - 1 + side * -1.5f, cx + 14, cy - 1 - side * -1.5f, 3.5f);
-        curve(dst, cx - 12, cy + 11, cx, cy + 14, cx + 12, cy + 11, 1.4f);
+        for (int y = (int)cy; y <= (int)(cy + 9 * FK); y++)
+          for (int x = (int)(cx - 9 * FK); x <= (int)(cx + 9 * FK); x++)
+            if (hypotf(x + 0.5f - (cx + side * 2 * FK), y + 0.5f - cy) <= 8.5f * FK) paintPx(dst, x, y, faceInk[3]);
+        disc(dst, cx + (side * 2 - 3) * FK, cy + 3 * FK, 1.6f * FK, 0xFF);
+        stroke(dst, cx - 14 * FK, cy - (1 + side * 1.5f) * FK, cx + 14 * FK, cy - (1 - side * 1.5f) * FK, 3.5f * FK);
+        curve(dst, cx - 12 * FK, cy + 11 * FK, cx, cy + 14 * FK, cx + 12 * FK, cy + 11 * FK, 1.4f * FK);
         break;
       }
     }
@@ -314,17 +324,19 @@ static void drawMoodEyes(uint8_t *dst) {
 
 static void drawMoodBrows(uint8_t *dst) {
   for (int i = 0; i < 2; i++) {
-    float cx = eyeX[i], cy = eyeY[i] - 19, in = i ? -1 : 1;   // in: toward the nose
+    float cx = eyeX[i], cy = eyeY[i] - 19 * FK, in = i ? -FK : FK;   // in: toward the nose
     switch (faceMood) {
-      case MOOD_ANGRY:    stroke(dst, cx - in * 13, cy - 6, cx + in * 11, cy + 4, 4.0f); break;
-      case MOOD_SAD:      stroke(dst, cx - in * 13, cy + 3, cx + in * 11, cy - 6, 3.5f); break;
-      case MOOD_SURPRISED: curve(dst, cx - 12, cy - 4, cx, cy - 14, cx + 12, cy - 4, 3.0f); break;
+      case MOOD_ANGRY:    stroke(dst, cx - in * 13, cy - 6 * FK, cx + in * 11, cy + 4 * FK, 4.0f * FK); break;
+      case MOOD_SAD:      stroke(dst, cx - in * 13, cy + 3 * FK, cx + in * 11, cy - 6 * FK, 3.5f * FK); break;
+      case MOOD_SURPRISED:
+        curve(dst, cx - 12 * FK, cy - 4 * FK, cx, cy - 14 * FK, cx + 12 * FK, cy - 4 * FK, 3.0f * FK);
+        break;
       case MOOD_SMUG:
-        if (i) curve(dst, cx - 12, cy - 2, cx, cy - 12, cx + 12, cy - 6, 3.0f);
-        else   stroke(dst, cx - 12, cy + 1, cx + 12, cy + 3, 3.0f);
+        if (i) curve(dst, cx - 12 * FK, cy - 2 * FK, cx, cy - 12 * FK, cx + 12 * FK, cy - 6 * FK, 3.0f * FK);
+        else   stroke(dst, cx - 12 * FK, cy + FK, cx + 12 * FK, cy + 3 * FK, 3.0f * FK);
         break;
       case MOOD_CURIOUS:
-        if (i) curve(dst, cx - 12, cy - 3, cx, cy - 13, cx + 12, cy - 5, 3.0f);
+        if (i) curve(dst, cx - 12 * FK, cy - 3 * FK, cx, cy - 13 * FK, cx + 12 * FK, cy - 5 * FK, 3.0f * FK);
         break;
     }
   }
@@ -334,28 +346,28 @@ static void drawMoodSymbols(uint8_t *dst) {
   float pop = popIn(faceMoodMs), tw = faceNowMs / 1000.0f;
   switch (faceMood) {
     case MOOD_HAPPY:
-      sparkle(dst, 52, 48, (15 + 4 * sinf(tw * 6.0f)) * pop);
-      sparkle(dst, 276, 118, (12 + 4 * sinf(tw * 6.0f + 2)) * pop);
-      sparkle(dst, 34, 140, (10 + 3 * sinf(tw * 6.0f + 4)) * pop);
+      sparkle(dst, spotX(-1.39f), spotY(-1.24f), (15 + 4 * sinf(tw * 6.0f)) * FK * pop);
+      sparkle(dst, spotX(1.77f), spotY(-0.26f), (12 + 4 * sinf(tw * 6.0f + 2)) * FK * pop);
+      sparkle(dst, spotX(-1.65f), spotY(0.05f), (10 + 3 * sinf(tw * 6.0f + 4)) * FK * pop);
       break;
     case MOOD_ANGRY:
-      angerVein(dst, 218, 72, 1.7f * pop * (1.0f + 0.12f * sinf(tw * 14.0f)));
+      angerVein(dst, spotX(0.95f), spotY(-0.91f), 1.7f * FK * pop * (1.0f + 0.12f * sinf(tw * 14.0f)));
       break;
     case MOOD_SAD: {
       float fall = fmodf(faceMoodMs / 1400.0f, 1.0f);
-      drop(dst, 240, 92 + 18 * fall, 8.0f * pop);
-      drop(dst, eyeX[0] - 4, eyeY[0] + 16 + 12 * fall, 4.0f * pop);
+      drop(dst, spotX(1.26f), spotY(-0.62f) + 18 * FK * fall, 8.0f * FK * pop);
+      drop(dst, eyeX[0] - 4 * FK, eyeY[0] + (16 + 12 * fall) * FK, 4.0f * FK * pop);
       break;
     }
     case MOOD_SURPRISED:
-      glyph(dst, '!', 262, 52 - 3 * fabsf(sinf(tw * 9.0f)), 1.2f * pop, moodColor(7, 1, 0, 1));
-      glyph(dst, '!', 286, 64 - 3 * fabsf(sinf(tw * 9.0f + 1)), 0.9f * pop, moodColor(7, 1, 0, 1));
+      glyph(dst, '!', spotX(1.57f), spotY(-1.19f) - 3 * fabsf(sinf(tw * 9.0f)), 1.2f * FK * pop, moodColor(7, 1, 0, 1));
+      glyph(dst, '!', spotX(1.91f), spotY(-1.02f) - 3 * fabsf(sinf(tw * 9.0f + 1)), 0.9f * FK * pop, moodColor(7, 1, 0, 1));
       break;
     case MOOD_CURIOUS:
-      glyph(dst, '?', 266, 52 + 3 * sinf(tw * 4.0f), 1.15f * pop, moodColor(2, 5, 3, 1));
+      glyph(dst, '?', spotX(1.63f), spotY(-1.19f) + 3 * sinf(tw * 4.0f), 1.15f * FK * pop, moodColor(2, 5, 3, 1));
       break;
     case MOOD_SMUG:
-      sparkle(dst, 262, 96, (12 + 3 * sinf(tw * 5.0f)) * pop);
+      sparkle(dst, spotX(1.57f), spotY(-0.57f), (12 + 3 * sinf(tw * 5.0f)) * FK * pop);
       break;
   }
 }

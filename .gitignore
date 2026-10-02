@@ -13,3 +13,4 @@ __pycache__/
 # talking-face art: someone else's drawing, kept local (see src/face.h)
 tools/art/
 src/catgirl_art.h
+src/face_art.h
