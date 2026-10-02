@@ -6,8 +6,9 @@
 // ── Talking mouth ──────────────────────────────────
 // While Alice (the PC's local TTS voice) speaks, the agent relays her
 // kokoro_synth.py stream: {"talk":1} / {"talk":0} around each utterance,
-// {"m":0..1} mouth openness every 40 ms, {"w":"word"} as each word is heard
-// and {"p":","} for punctuation. The screen switches to a full-screen mouth
+// {"m":0..1} mouth openness every 40 ms, {"w":"word"} as each word is heard,
+// {"p":","} for punctuation and {"mood":"happy"} etc. as each sentence starts
+// (see face.h). The screen switches to a full-screen mouth
 // with the words captioned underneath, then drops back when she's done.
 
 enum { TALK_OFF = 0, TALK_ON, TALK_CLOSING };
@@ -16,6 +17,7 @@ uint32_t talkRx     = 0;     // last mouth message
 uint32_t talkEndAt  = 0;
 float    mouthTarget = 0, mouthOpen = 0;
 uint32_t wordAt     = 0;
+uint32_t moodAt     = 0;     // when the current mood started (pop-in)
 uint32_t mouthRx = 0, mouthFrames = 0;   // debug counters     // when the newest word arrived (caption flash)
 
 #define TALK_HOLD_MS    700   // closed mouth stays up this long after she stops
@@ -49,8 +51,11 @@ bool mouthMsg(JsonDocument &doc) {
     mouthTarget = constrain(doc["m"].as<float>(), 0.0f, 1.0f);
     if (talkState != TALK_ON) { talkState = TALK_ON; captionReset(); }
   } else if (doc["talk"].is<int>()) {
-    if (doc["talk"].as<int>()) { talkState = TALK_ON; captionReset(); mouthTarget = 0; }
+    if (doc["talk"].as<int>()) { talkState = TALK_ON; captionReset(); mouthTarget = 0; faceMood = MOOD_NEUTRAL; }
     else if (talkState == TALK_ON) { talkState = TALK_CLOSING; talkEndAt = now; mouthTarget = 0; }
+  } else if (const char *md = doc["mood"]) {
+    for (int i = 0; i < MOOD_COUNT; i++)
+      if (!strcmp(md, moodNames[i]) && i != faceMood) { faceMood = i; moodAt = now; }
   } else if (const char *w = doc["w"]) {
     captionWord(w, false); wordAt = now;
   } else if (const char *p = doc["p"]) {
@@ -99,7 +104,10 @@ void drawMouth() {
   mouthFrames++;
   mouthOpen += (mouthTarget - mouthOpen) * 0.55f;
   if (!faceReady()) return;
-  blinkUpdate(millis());
+  uint32_t now = millis();
+  blinkUpdate(now);
+  faceNowMs = now;
+  faceMoodMs = now - moodAt;
   faceDraw((uint8_t *)fb.getPointer(), powf(mouthOpen, 0.8f));
 
   // caption: the line being spoken, under the picture (FACE_H = 212)

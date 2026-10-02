@@ -1,20 +1,20 @@
 // Preview the talking face on a PC: g++ -O2 -I src tools/face_preview.cpp -o /tmp/fp && /tmp/fp out.ppm [mono]
-// Writes a 3x2 sheet of the face at a few mouth openings, the last one blinking
+// Writes a 4x2 sheet: every mood with the mouth closed, plus one talking frame
 // (RGB332 expanded to RGB888).
 #include <cstdio>
 #include "face.h"
 
 int main(int argc, char **argv) {
-  const float opens[] = {0, 0.15f, 0.35f, 0.6f, 1.0f, 0.5f};
-  const int n = 6, cols = 3;
+  const int n = 8, cols = 4;
   static uint8_t fb[FACE_W * FACE_H];
   faceInit(argc > 2);
   FILE *f = fopen(argc > 1 ? argv[1] : "face.ppm", "wb");
   fprintf(f, "P6 %d %d 255\n", FACE_W * cols, FACE_H * (n / cols));
-  static uint8_t img[FACE_H * 2][FACE_W * 3][3];
+  static uint8_t img[FACE_H * 2][FACE_W * 4][3];
   for (int i = 0; i < n; i++) {
-    faceBlink = i == n - 1;
-    faceDraw(fb, opens[i]);
+    faceMood = i < MOOD_COUNT ? i : MOOD_ANGRY;
+    faceMoodMs = 1000; faceNowMs = 400;
+    faceDraw(fb, i < MOOD_COUNT ? 0 : 0.6f);
     int ox = (i % cols) * FACE_W, oy = (i / cols) * FACE_H;
     for (int y = 0; y < FACE_H; y++)
       for (int x = 0; x < FACE_W; x++) {

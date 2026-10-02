@@ -2,7 +2,8 @@
 """Bake tools/art/catgirl.png (line art) into src/catgirl_art.h for the talking face.
 
 The head is cropped, the drawn mouth is erased (face.h animates its own), and
-a second copy of the eye rows is made with the eyes shut for blinking. Pixels
+copies of the eye rows are made with the eyes shut (blinking) and wiped
+(moods that draw their own eyes). Pixels
 are stored as 2-bit ink levels (0 = paper .. 3 = black), four per byte.
 
     python tools/make_catgirl.py [preview.png]
@@ -35,6 +36,11 @@ def main():
     mx, my = MOUTH
     d.ellipse((mx - 44, my - 28, mx + 44, my + 26), fill=255)
 
+    blank = art.copy()                             # eyes wiped: moods draw their own
+    db = ImageDraw.Draw(blank)
+    for e in EYES:
+        db.polygon(e["wipe"], fill=255)
+
     shut = art.copy()
     ds = ImageDraw.Draw(shut)
     for e in EYES:
@@ -54,7 +60,7 @@ def main():
             lv.append(0 if ink < .16 else 1 if ink < .42 else 2 if ink < .72 else 3)
         return lv
 
-    open_, shut_ = bake(art), bake(shut)
+    open_, shut_, blank_ = bake(art), bake(shut), bake(blank)
     rows = [y for y in range(FACE_H) if open_[y * w:(y + 1) * w] != shut_[y * w:(y + 1) * w]]
     ey0, ey1 = rows[0], rows[-1] + 1
 
@@ -84,12 +90,17 @@ def main():
         "#include <stdint.h>\n#ifndef PROGMEM\n#define PROGMEM\n#endif\n\n"
         f"#define CAT_W {w}\n#define CAT_H {FACE_H}\n#define CAT_X {(320 - w) // 2}\n#define CAT_STRIDE {stride}\n"
         f"#define CAT_EYE_Y0 {ey0}\n#define CAT_EYE_Y1 {ey1}\n"
+        + "".join(f"#define CAT_EYE{i}_X {sx(sum(p[0] for p in e['wipe']) / len(e['wipe'])):.1f}f\n"
+                  f"#define CAT_EYE{i}_Y {sy(sum(p[1] for p in e['wipe']) / len(e['wipe'])):.1f}f\n"
+                  for i, e in enumerate(EYES))
+        + 
         f"#define CAT_MOUTH_X {sx(mx):.1f}f\n#define CAT_MOUTH_Y {sy(my):.1f}f\n#define CAT_SCALE {s:.4f}f\n"
         + "".join(f"#define CAT_CHEEK{i}_X {sx(x):.1f}f\n#define CAT_CHEEK{i}_Y {sy(y):.1f}f\n"
                   for i, (x, y) in enumerate(CHEEKS))
-        + "\n" + carr("catArt", rowpack(open_, 0, FACE_H)) + "\n" + carr("catEyesShut", rowpack(shut_, ey0, ey1)))
+        + "\n" + carr("catArt", rowpack(open_, 0, FACE_H)) + "\n" + carr("catEyesShut", rowpack(shut_, ey0, ey1))
+        + "\n" + carr("catEyesBlank", rowpack(blank_, ey0, ey1)))
     print(f"{OUT.name}: {w}x{FACE_H}, eye rows {ey0}-{ey1}, "
-          f"{stride * FACE_H + stride * (ey1 - ey0)} bytes")
+          f"{stride * FACE_H + 2 * stride * (ey1 - ey0)} bytes")
 
     if len(sys.argv) > 1:                          # debug: the source edits, full size
         both = Image.new("L", (art.width * 2, art.height), 255)

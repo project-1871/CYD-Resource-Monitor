@@ -13,6 +13,10 @@
 #define CAT_STRIDE 1
 #define CAT_EYE_Y0 0
 #define CAT_EYE_Y1 0
+#define CAT_EYE0_X 120.0f
+#define CAT_EYE0_Y 90.0f
+#define CAT_EYE1_X 200.0f
+#define CAT_EYE1_Y 90.0f
 #define CAT_MOUTH_X 160.0f
 #define CAT_MOUTH_Y 120.0f
 #define CAT_SCALE 0.4f
@@ -22,6 +26,7 @@
 #define CAT_CHEEK1_Y 100.0f
 static const uint8_t catArt[1] = {0};
 static const uint8_t catEyesShut[1] = {0};
+static const uint8_t catEyesBlank[1] = {0};
 #endif
 
 // ── Talking face ────────────────────────────────────
@@ -40,6 +45,20 @@ static bool faceOk   = false;
 static bool faceMono = false;
 static bool faceBlink = false;   // set by the caller while the eyes are shut
 
+// Moods: picked per sentence on the PC (kokoro_synth.py) and sent as {"mood":..}.
+// Each one gets comic eyes/brows and a manga symbol drawn over the art.
+enum { MOOD_NEUTRAL = 0, MOOD_HAPPY, MOOD_ANGRY, MOOD_SAD, MOOD_SURPRISED,
+       MOOD_SMUG, MOOD_CURIOUS, MOOD_COUNT };
+static const char *const moodNames[MOOD_COUNT] =
+    {"neutral", "happy", "angry", "sad", "surprised", "smug", "curious"};
+static int faceMood = MOOD_NEUTRAL;
+static uint32_t faceMoodMs = 0;   // ms since the mood started (pop-in animation)
+static uint32_t faceNowMs  = 0;   // free-running clock for wobble/twinkle
+// moods that wipe the drawn eyes and paint their own
+static inline bool moodOwnEyes(int m) {
+  return m == MOOD_HAPPY || m == MOOD_SURPRISED || m == MOOD_SMUG;
+}
+
 #define RGB332(r, g, b) (uint8_t)(((r) << 5) | ((g) << 2) | (b))
 static const uint8_t faceInk[4] = {0xFF, RGB332(5, 5, 2), RGB332(2, 2, 1), 0};
 
@@ -55,9 +74,11 @@ static bool faceInit(bool mono) {
 static inline int catLevel(int x, int y) {
   int ax = x - CAT_X;
   if (ax < 0 || ax >= CAT_W) return 0;
-  const uint8_t *row = (faceBlink && y >= CAT_EYE_Y0 && y < CAT_EYE_Y1)
-                           ? catEyesShut + (y - CAT_EYE_Y0) * CAT_STRIDE
-                           : catArt + y * CAT_STRIDE;
+  const uint8_t *row = catArt + y * CAT_STRIDE;
+  if (y >= CAT_EYE_Y0 && y < CAT_EYE_Y1) {
+    if (moodOwnEyes(faceMood)) row = catEyesBlank + (y - CAT_EYE_Y0) * CAT_STRIDE;
+    else if (faceBlink)        row = catEyesShut + (y - CAT_EYE_Y0) * CAT_STRIDE;
+  }
   return (row[ax >> 2] >> (6 - 2 * (ax & 3))) & 3;
 }
 
@@ -148,6 +169,210 @@ static void drawOpenMouth(uint8_t *dst, float o) {
     }
 }
 
+// ── Mood overlays ───────────────────────────────────
+// Small vector helpers that paint straight into the 8-bit buffer. Black strokes
+// go through inkPx (anti-aliased, darkest wins); colour fills just overwrite.
+
+static inline void paintPx(uint8_t *dst, int x, int y, uint8_t c) {
+  if (x >= 0 && x < FACE_W && y >= 0 && y < FACE_H) dst[y * FACE_W + x] = c;
+}
+
+static inline float segDist(float px, float py, float x0, float y0, float x1, float y1) {
+  float dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
+  float t = l2 > 0 ? fclamp(((px - x0) * dx + (py - y0) * dy) / l2, 0, 1) : 0;
+  return hypotf(px - (x0 + t * dx), py - (y0 + t * dy));
+}
+
+// stroke from (x0,y0) to (x1,y1), width w; c = 0 means black ink
+static void stroke(uint8_t *dst, float x0, float y0, float x1, float y1, float w, uint8_t c = 0) {
+  int xa = (int)(fminf(x0, x1) - w - 1), xb = (int)(fmaxf(x0, x1) + w + 1);
+  int ya = (int)(fminf(y0, y1) - w - 1), yb = (int)(fmaxf(y0, y1) + w + 1);
+  for (int y = ya; y <= yb; y++)
+    for (int x = xa; x <= xb; x++) {
+      float cov = w / 2 + 0.5f - segDist(x + 0.5f, y + 0.5f, x0, y0, x1, y1);
+      if (cov <= 0) continue;
+      if (c) { if (cov > 0.5f) paintPx(dst, x, y, c); }
+      else inkPx(dst, x, y, fclamp(cov, 0, 1));
+    }
+}
+
+// quadratic curve through (x0,y0) -> (x2,y2) bent toward control (x1,y1)
+static void curve(uint8_t *dst, float x0, float y0, float x1, float y1, float x2, float y2,
+                  float w, uint8_t c = 0) {
+  const int N = 10;
+  float px = x0, py = y0;
+  for (int i = 1; i <= N; i++) {
+    float t = i / (float)N, u = 1 - t;
+    float x = u * u * x0 + 2 * u * t * x1 + t * t * x2, y = u * u * y0 + 2 * u * t * y1 + t * t * y2;
+    stroke(dst, px, py, x, y, w, c);
+    px = x; py = y;
+  }
+}
+
+static void disc(uint8_t *dst, float cx, float cy, float r, uint8_t c) {
+  for (int y = (int)(cy - r - 1); y <= (int)(cy + r + 1); y++)
+    for (int x = (int)(cx - r - 1); x <= (int)(cx + r + 1); x++)
+      if (hypotf(x + 0.5f - cx, y + 0.5f - cy) <= r) paintPx(dst, x, y, c);
+}
+
+static void ring(uint8_t *dst, float cx, float cy, float r, float w) {
+  for (int y = (int)(cy - r - w); y <= (int)(cy + r + w); y++)
+    for (int x = (int)(cx - r - w); x <= (int)(cx + r + w); x++)
+      inkPx(dst, x, y, w / 2 + 0.5f - fabsf(hypotf(x + 0.5f - cx, y + 0.5f - cy) - r));
+}
+
+// pop-in: overshoots a little, settles at 1 after ~250 ms
+static inline float popIn(uint32_t ms) {
+  float t = fclamp(ms / 250.0f, 0, 1), u = t - 1;
+  return 1 + 2.7f * u * u * u + 1.7f * u * u;
+}
+
+static inline uint8_t moodColor(uint8_t r, uint8_t g, uint8_t b, int grey) {
+  return faceMono ? faceInk[grey] : RGB332(r, g, b);
+}
+
+// 4-point twinkle star
+static void sparkle(uint8_t *dst, float cx, float cy, float r) {
+  if (r < 1) return;
+  const uint8_t gold = moodColor(7, 6, 0, 2);
+  for (int y = (int)(cy - r); y <= (int)(cy + r); y++)
+    for (int x = (int)(cx - r); x <= (int)(cx + r); x++) {
+      float dx = fabsf(x + 0.5f - cx) / r, dy = fabsf(y + 0.5f - cy) / r;
+      if (sqrtf(dx) + sqrtf(dy) <= 1) paintPx(dst, x, y, gold);
+    }
+  disc(dst, cx, cy, r * 0.14f + 0.6f, 0xFF);
+}
+
+// 💢 anger vein: four bent strokes around a centre, pulsing
+static void angerVein(uint8_t *dst, float cx, float cy, float s) {
+  const uint8_t red = moodColor(7, 0, 0, 2);
+  float r = 7 * s, g = 2.5f * s;
+  for (int q = 0; q < 4; q++) {
+    float sx = (q & 1) ? 1 : -1, sy = (q & 2) ? 1 : -1;
+    float ax = cx + sx * g, ay = cy + sy * (g + r), bx = cx + sx * (g + r), by = cy + sy * g;
+    curve(dst, ax, ay, cx + sx * g, cy + sy * g, bx, by, 3.2f * s, red);
+  }
+}
+
+// sweat / tear drop, point up
+static void drop(uint8_t *dst, float cx, float cy, float r) {
+  const uint8_t blue = moodColor(3, 6, 3, 1);
+  for (int y = (int)(cy - 2.6f * r); y <= (int)(cy + r + 1); y++)
+    for (int x = (int)(cx - r - 1); x <= (int)(cx + r + 1); x++) {
+      float px = x + 0.5f - cx, py = y + 0.5f - cy;
+      bool in = py >= 0 ? hypotf(px, py) <= r : fabsf(px) <= r * (1 + py / (2.6f * r));
+      if (in) paintPx(dst, x, y, blue);
+    }
+  disc(dst, cx - r * 0.35f, cy - r * 0.1f, r * 0.25f, 0xFF);
+}
+
+// big bold "!" or "?" (comic lettering, black with the mood colour inside)
+static void glyph(uint8_t *dst, char ch, float cx, float cy, float s, uint8_t fill) {
+  for (int pass = 0; pass < 2; pass++) {
+    float w = (pass ? 3.5f : 6.5f) * s;
+    uint8_t c = pass ? fill : 0;
+    if (ch == '!') {
+      stroke(dst, cx, cy - 13 * s, cx, cy + 3 * s, w, c);
+      disc(dst, cx, cy + 10 * s, w * 0.55f, pass ? fill : faceInk[3]);
+    } else {
+      curve(dst, cx - 7 * s, cy - 8 * s, cx - 6 * s, cy - 18 * s, cx + 2 * s, cy - 15 * s, w, c);
+      curve(dst, cx + 2 * s, cy - 15 * s, cx + 10 * s, cy - 11 * s, cx + 1 * s, cy - 3 * s, w, c);
+      stroke(dst, cx + 1 * s, cy - 3 * s, cx, cy + 2 * s, w, c);
+      disc(dst, cx, cy + 10 * s, w * 0.55f, pass ? fill : faceInk[3]);
+    }
+  }
+}
+
+// eye centres in screen px (the art's eyes tilt: the right one sits higher)
+static const float eyeX[2] = {CAT_EYE0_X + 2, CAT_EYE1_X + 4};
+static const float eyeY[2] = {CAT_EYE0_Y - 8, CAT_EYE1_Y - 2};
+
+static void drawMoodEyes(uint8_t *dst) {
+  for (int i = 0; i < 2; i++) {
+    float cx = eyeX[i], cy = eyeY[i], side = i ? 1 : -1;   // side: outer direction
+    switch (faceMood) {
+      case MOOD_HAPPY:            // ^ ^
+        curve(dst, cx - 13, cy + 5, cx, cy - 13, cx + 13, cy + 5, 3.5f);
+        break;
+      case MOOD_SURPRISED:        // wide round eyes, tiny pupils
+        ring(dst, cx, cy, 12, 2.5f);
+        disc(dst, cx, cy + 1, 4.5f, faceInk[3]);
+        disc(dst, cx - 1.5f, cy - 1, 1.3f, 0xFF);
+        break;
+      case MOOD_SMUG: {           // half-lidded, iris peeking under a flat lid
+        for (int y = (int)cy; y <= (int)(cy + 9); y++)
+          for (int x = (int)(cx - 9); x <= (int)(cx + 9); x++)
+            if (hypotf(x + 0.5f - (cx + side * 2), y + 0.5f - cy) <= 8.5f) paintPx(dst, x, y, faceInk[3]);
+        disc(dst, cx + side * 2 - 3, cy + 3, 1.6f, 0xFF);
+        stroke(dst, cx - 14, cy - 1 + side * -1.5f, cx + 14, cy - 1 - side * -1.5f, 3.5f);
+        curve(dst, cx - 12, cy + 11, cx, cy + 14, cx + 12, cy + 11, 1.4f);
+        break;
+      }
+    }
+  }
+}
+
+static void drawMoodBrows(uint8_t *dst) {
+  for (int i = 0; i < 2; i++) {
+    float cx = eyeX[i], cy = eyeY[i] - 19, in = i ? -1 : 1;   // in: toward the nose
+    switch (faceMood) {
+      case MOOD_ANGRY:    stroke(dst, cx - in * 13, cy - 6, cx + in * 11, cy + 4, 4.0f); break;
+      case MOOD_SAD:      stroke(dst, cx - in * 13, cy + 3, cx + in * 11, cy - 6, 3.5f); break;
+      case MOOD_SURPRISED: curve(dst, cx - 12, cy - 4, cx, cy - 14, cx + 12, cy - 4, 3.0f); break;
+      case MOOD_SMUG:
+        if (i) curve(dst, cx - 12, cy - 2, cx, cy - 12, cx + 12, cy - 6, 3.0f);
+        else   stroke(dst, cx - 12, cy + 1, cx + 12, cy + 3, 3.0f);
+        break;
+      case MOOD_CURIOUS:
+        if (i) curve(dst, cx - 12, cy - 3, cx, cy - 13, cx + 12, cy - 5, 3.0f);
+        break;
+    }
+  }
+}
+
+static void drawMoodSymbols(uint8_t *dst) {
+  float pop = popIn(faceMoodMs), tw = faceNowMs / 1000.0f;
+  switch (faceMood) {
+    case MOOD_HAPPY:
+      sparkle(dst, 52, 48, (15 + 4 * sinf(tw * 6.0f)) * pop);
+      sparkle(dst, 276, 118, (12 + 4 * sinf(tw * 6.0f + 2)) * pop);
+      sparkle(dst, 34, 140, (10 + 3 * sinf(tw * 6.0f + 4)) * pop);
+      break;
+    case MOOD_ANGRY:
+      angerVein(dst, 218, 72, 1.7f * pop * (1.0f + 0.12f * sinf(tw * 14.0f)));
+      break;
+    case MOOD_SAD: {
+      float fall = fmodf(faceMoodMs / 1400.0f, 1.0f);
+      drop(dst, 240, 92 + 18 * fall, 8.0f * pop);
+      drop(dst, eyeX[0] - 4, eyeY[0] + 16 + 12 * fall, 4.0f * pop);
+      break;
+    }
+    case MOOD_SURPRISED:
+      glyph(dst, '!', 262, 52 - 3 * fabsf(sinf(tw * 9.0f)), 1.2f * pop, moodColor(7, 1, 0, 1));
+      glyph(dst, '!', 286, 64 - 3 * fabsf(sinf(tw * 9.0f + 1)), 0.9f * pop, moodColor(7, 1, 0, 1));
+      break;
+    case MOOD_CURIOUS:
+      glyph(dst, '?', 266, 52 + 3 * sinf(tw * 4.0f), 1.15f * pop, moodColor(2, 5, 3, 1));
+      break;
+    case MOOD_SMUG:
+      sparkle(dst, 262, 96, (12 + 3 * sinf(tw * 5.0f)) * pop);
+      break;
+  }
+}
+
+// closed mouth for each mood (the open, talking mouth is the same for all)
+static void drawClosedMouth(uint8_t *dst) {
+  float x = CAT_MOUTH_X, y = CAT_MOUTH_Y;
+  switch (faceMood) {
+    case MOOD_ANGRY: curve(dst, x - 7, y + 3, x, y - 4, x + 7, y + 3, 1.8f); break;      // pout
+    case MOOD_SAD:   curve(dst, x - 7, y + 2, x - 3, y - 2, x, y + 1, 1.5f);
+                     curve(dst, x, y + 1, x + 3, y - 2, x + 7, y + 2, 1.5f); break;      // wobbly
+    case MOOD_SURPRISED: ring(dst, x, y, 3.5f, 1.8f); break;                             // o
+    case MOOD_SMUG:  curve(dst, x - 6, y, x + 2, y + 4, x + 8, y - 3, 1.6f); break;      // smirk
+    default:         drawCatMouth(dst); break;                                           // :3
+  }
+}
+
 // o: mouth openness 0..1
 static void faceDraw(uint8_t *dst, float o) {
   for (int y = 0; y < FACE_H; y++) {
@@ -156,6 +381,13 @@ static void faceDraw(uint8_t *dst, float o) {
   }
   drawBlush(dst, CAT_CHEEK0_X, CAT_CHEEK0_Y);
   drawBlush(dst, CAT_CHEEK1_X, CAT_CHEEK1_Y);
-  if (o < 0.08f) drawCatMouth(dst);
+  if (faceMood == MOOD_SMUG || faceMood == MOOD_HAPPY) {     // extra blush
+    drawBlush(dst, CAT_CHEEK0_X + 9, CAT_CHEEK0_Y - 1);
+    drawBlush(dst, CAT_CHEEK1_X - 9, CAT_CHEEK1_Y - 1);
+  }
+  drawMoodEyes(dst);
+  drawMoodBrows(dst);
+  if (o < 0.08f) drawClosedMouth(dst);
   else           drawOpenMouth(dst, (o - 0.08f) / 0.92f);
+  drawMoodSymbols(dst);
 }

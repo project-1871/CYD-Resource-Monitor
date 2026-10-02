@@ -73,7 +73,7 @@ To add an icon, add a `(name, codepoint)` pair to `ICONS` in [`tools/make_icons.
 
 ### Hello / goodbye screen
 
-When the agent starts (e.g. at login) the CYD types out **HELLO** full-screen in the current theme with "<hostname> is online", then returns to the dashboard. When the agent is stopped (shutdown, logout, `systemctl --user stop`, Ctrl+C) it sends a **GOODBYE** that stays up until data comes back. If your board cuts USB power at shutdown, the goodbye only shows briefly.
+When the agent starts (e.g. at login) the CYD types out **HELLO** full-screen in the current theme with "<hostname> is online", then returns to the dashboard. When the agent is stopped (shutdown, logout, `systemctl --user stop`, Ctrl+C) it sends a **GOODBYE**; after 3 seconds the backlight turns off, and it comes back on with the next HELLO or stats. Stopping the agent on suspend and starting it on wake (e.g. from a logind `PrepareForSleep` watcher) makes the CYD go dark while the PC sleeps.
 
 ### Page button
 
@@ -89,7 +89,9 @@ Drives the [Radio Atlas](https://github.com/AksharP5/omarchy-radio-atlas) Omarch
 
 ### Talking face (optional)
 
-If something sends JSON datagrams to UDP `127.0.0.1:47811` (`{"talk":1}`, `{"m":0.0-1.0}` mouth openness, `{"w":"word"}` captions, `{"talk":0}`), the agent relays them and the CYD shows a full-screen talking face lip-synced to it, with the words captioned underneath. The author feeds it from a local text-to-speech voice. The face art isn't included: put a black-and-white line drawing at `tools/art/catgirl.png` and run `tools/make_catgirl.py` (edit the mouth/eye coordinates at the top for your drawing). Without it the mouth animates on a blank page. `tools/face_preview.cpp` renders frames on a PC.
+If something sends JSON datagrams to UDP `127.0.0.1:47811` (`{"talk":1}`, `{"m":0.0-1.0}` mouth openness, `{"w":"word"}` captions, `{"mood":"happy"}`, `{"talk":0}`), the agent relays them and the CYD shows a full-screen talking face lip-synced to it, with the words captioned underneath. The author feeds it from a local text-to-speech voice. The face art isn't included: put a black-and-white line drawing at `tools/art/catgirl.png` and run `tools/make_catgirl.py` (edit the mouth/eye coordinates at the top for your drawing). Without it the mouth animates on a blank page. `tools/face_preview.cpp` renders frames on a PC.
+
+**Moods:** send `{"mood":X}` as a sentence starts and the face switches expression, with a manga symbol that pops in: `happy` (^^ eyes, sparkles), `angry` (slanted brows, pulsing anger vein), `sad` (worried brows, sweat drop and tear), `surprised` (round eyes, "!!"), `smug` (half-lidded eyes, smirk), `curious` (raised brow, "?") or `neutral`. Each mood resets to neutral at the next `{"talk":1}`.
 
 ### Extra themes
 

@@ -63,9 +63,26 @@ void setup() {
   faceReady();                     // set up the talking face
 }
 
+// After GOODBYE has shown for a few seconds (PC asleep / shut down), turn the
+// backlight off; it comes back on with the next hello or stats.
+#define BYE_DARK_MS 3000
+bool backlightOn = true;
+void setBacklight(bool on) {
+  if (on == backlightOn) return;
+  backlightOn = on;
+  digitalWrite(TFT_BL, on ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
+}
+
 void loop() {
   inputUpdate();
   serialPoll();
+
+  if (msgKind == MSG_BYE && millis() - msgAt > BYE_DARK_MS) {
+    if (backlightOn) { tft.fillScreen(TFT_BLACK); setBacklight(false); }
+    delay(50);
+    return;
+  }
+  setBacklight(true);
 
   fb.fillSprite(C_BG);
   if (mouthActive()) drawMouth();   // Alice is speaking: takes the whole screen
